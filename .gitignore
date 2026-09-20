@@ -36,3 +36,10 @@
 *.local
 .direnv/
 # <<< dev gitignore <<<
+
+# Local builds and test artifacts
+/build/
+/lazychezmoi
+/lazychezmoi.exe
+*.test
+__pycache__/

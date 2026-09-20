@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install fixture backend
+        run: go install github.com/twpayne/chezmoi/v2@v2.69.4
+      - name: Install Unix test shells
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+      - name: Install ConPTY harness
+        if: runner.os == 'Windows'
+        run: python -m pip install pywinpty==3.0.2
+      - name: Static analysis
+        run: go vet ./...
+      - name: Tests and races
+        run: go test -race ./...
+      - name: Build
+        run: go build -o build/ ./...
+      - name: Terminal acceptance (Unix)
+        if: runner.os != 'Windows'
+        run: python scripts/pty_smoke.py build/lazychezmoi
+      - name: Terminal acceptance (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/pty_smoke.py build/lazychezmoi.exe
