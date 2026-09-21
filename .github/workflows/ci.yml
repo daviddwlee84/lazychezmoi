@@ -46,6 +46,8 @@ jobs:
         run: python -m pip install pywinpty==3.0.2
       - name: Install terminal screen assertions
         run: python -m pip install pyte==0.8.2
+      - name: Verify terminal screen scrolling model
+        run: python -m unittest discover -s scripts -p test_terminal_screen.py
       - name: Static analysis
         run: go vet ./...
       - name: Tests and races

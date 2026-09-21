@@ -11,14 +11,14 @@ import tempfile
 import time
 import queue
 
-import pyte
 from pty_smoke import Terminal
+from terminal_screen import Screen, Stream
 
 
 class FeatureTerminal(Terminal):
     def __init__(self, argv, env):
-        self.screen = pyte.Screen(100, 24)
-        self.stream = pyte.Stream(self.screen)
+        self.screen = Screen(100, 24)
+        self.stream = Stream(self.screen)
         self.last_output = time.monotonic()
         super().__init__(argv, env)
 
