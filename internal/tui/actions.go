@@ -19,6 +19,9 @@ func (m *model) actions() []action {
 	file := m.tab == 0 && selected
 	script := m.tab == 1 && selected
 	idle := m.pending == nil
+	match := m.selectedMatch()
+	hunks := m.tab == 0 && m.lists[0].view == 3 && m.lists[0].hunkMode
+	canCopy := hunks && hunkCount(&m.lists[0]) > 0 && !m.lists[0].previewLoading && !m.lists[0].stale && idle
 	hasChecked := false
 	for _, checked := range m.lists[0].checked {
 		if checked {
@@ -27,6 +30,18 @@ func (m *model) actions() []action {
 		}
 	}
 	return []action{
+		{"mouse", "m", "Toggle mouse capture", true, false, false},
+		{"search", "s", "Search file contents", true, false, true},
+		{"search-edit", "e", "Edit search result source", m.tab == 3 && match != nil && idle, true, true},
+		{"search-scope", "", "Toggle Source / Current search", m.tab == 3, false, false},
+		{"search-regex", "", "Toggle regex search", m.tab == 3, false, false},
+		{"maximize", "z", "Maximize / restore preview", m.tab != 2, false, false},
+		{"hunks", "H", "Toggle hunk picker", file, false, true},
+		{"next-hunk", "n", "Next hunk", hunks && hunkCount(&m.lists[0]) > 0, false, false},
+		{"prev-hunk", "N", "Previous hunk", hunks && hunkCount(&m.lists[0]) > 0, false, false},
+		{"hunk-to-current", "<", "Copy selected hunk Source → Current", canCopy, true, false},
+		{"hunk-to-source", ">", "Copy selected hunk Current → Source", canCopy, true, false},
+		{"undo-copy", "U", "Undo last hunk copy", m.lastCopy != nil && idle, true, false},
 		{"edit", "e", "Edit source in editor", (file || script) && idle, true, true},
 		{"edit-apply", "", "Edit source & apply", file && idle, true, false},
 		{"apply", "a", "Apply selected files (exclude scripts)", m.tab == 0 && (selected || hasChecked) && idle, true, true},
@@ -45,7 +60,7 @@ func (m *model) actions() []action {
 		{"next-preview", "v", "Next preview (Source / Current / Rendered / Diff)", m.tab < 2, false, false},
 		{"prev-preview", "[", "Previous preview", m.tab < 2, false, false},
 		{"next-preview", "]", "Next preview", m.tab < 2, false, false},
-		{"re-add", "", "Absorb local edits (re-add)", file && e.Kind == "file" && !e.Template && !e.Encrypted && idle, true, false},
+		{"re-add", "", "Absorb local edits (re-add)", file && e.Kind == "file" && !e.Template && !e.Encrypted && !e.ExactAncestor && idle, true, false},
 		{"reset-script", "x", "Reset exact script record", script && idle, true, false},
 		{"reset-apply-script", "X", "Reset record & apply script", script && idle, true, false},
 		{"init", "", "Init parameters", idle, true, false},
@@ -79,6 +94,51 @@ func (m *model) dispatch(id string) tea.Cmd {
 		return &pendingOperation{label: label, op: chezmoi.Operation{Kind: kind, Targets: targets}, entry: e}
 	}
 	switch id {
+	case "mouse":
+		m.opts.Mouse = !m.opts.Mouse
+		m.pressed = nil
+		if m.opts.Mouse {
+			m.report("Mouse capture enabled · m disables for text selection", false)
+		} else {
+			m.report("Mouse capture disabled · m enables", false)
+		}
+		return nil
+	case "search":
+		m.tab = 3
+		m.detail = false
+		m.maximized = false
+		return m.openInput("search")
+	case "search-edit":
+		return m.searchEdit()
+	case "search-scope":
+		if m.search.scope == "source" {
+			m.search.scope = "current"
+		} else {
+			m.search.scope = "source"
+		}
+		return m.scheduleSearch()
+	case "search-regex":
+		m.search.regex = !m.search.regex
+		return m.scheduleSearch()
+	case "maximize":
+		m.maximized = !m.maximized
+		if m.maximized {
+			m.detail = true
+		}
+		m.pressed = nil
+		return m.rerenderDiffs()
+	case "hunks":
+		return m.toggleHunks()
+	case "next-hunk":
+		return m.selectHunk(1)
+	case "prev-hunk":
+		return m.selectHunk(-1)
+	case "hunk-to-current":
+		return m.reviewHunk("source-to-current")
+	case "hunk-to-source":
+		return m.reviewHunk("current-to-source")
+	case "undo-copy":
+		return m.beginOperation(&pendingOperation{label: "Undo hunk copy", undo: m.lastCopy})
 	case "filter":
 		return m.openInput("filter")
 	case "palette":
@@ -113,6 +173,9 @@ func (m *model) dispatch(id string) tea.Cmd {
 	case "fetch-interactive":
 		return m.beginOperation(operation("fetch", "Fetch", nil))
 	case "refresh":
+		if m.tab == 3 {
+			return m.startSearch()
+		}
 		return m.refresh()
 	case "edit", "edit-apply":
 		op := operation("edit", "Edit source", []string{e.Target})

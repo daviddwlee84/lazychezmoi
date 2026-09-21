@@ -5,6 +5,7 @@ Unix uses the OS PTY; Windows uses pywinpty's native ConPTY backend. Nothing is
 read from or deployed to the user's chezmoi source, configuration, or home.
 """
 import argparse
+import codecs
 import errno
 import json
 import os
@@ -41,7 +42,7 @@ class Terminal:
             os.close(ready_read)
             self.pid, self.fd = pid, fd
             self.original = termios.tcgetattr(fd)
-            self.reader = lambda: os.read(fd, 8192).decode("utf-8", errors="replace")
+            self.reader = lambda: os.read(fd, 8192)
             self.resize(24, 100)
             os.write(ready_write, b"1")
             os.close(ready_write)
@@ -49,12 +50,15 @@ class Terminal:
         self.thread.start()
 
     def _read(self):
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
             while True:
                 data = self.reader()
                 if not data:
                     return
-                self.chunks.put(data)
+                text = decoder.decode(data) if isinstance(data, bytes) else data
+                if text:
+                    self.chunks.put(text)
         except (EOFError, OSError) as exc:
             if isinstance(exc, OSError) and exc.errno not in (None, errno.EIO, errno.EBADF):
                 self.chunks.put(str(exc))
@@ -133,8 +137,14 @@ class Terminal:
             else:
                 import signal
                 os.kill(self.pid, signal.SIGTERM)
-                os.waitpid(self.pid, 0)
-                self.code = -signal.SIGTERM
+                deadline = time.monotonic() + 2
+                while self.alive() and time.monotonic() < deadline:
+                    self.drain()
+                    time.sleep(0.025)
+                if self.alive():
+                    os.kill(self.pid, signal.SIGKILL)
+                    os.waitpid(self.pid, 0)
+                    self.code = -signal.SIGKILL
         if os.name != "nt":
             os.close(self.fd)
 

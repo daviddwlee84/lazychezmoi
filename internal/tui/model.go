@@ -4,19 +4,28 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/daviddwlee84/lazychezmoi/internal/chezmoi"
+	"github.com/daviddwlee84/lazychezmoi/internal/diffview"
+	"github.com/daviddwlee84/lazychezmoi/internal/search"
 	"github.com/daviddwlee84/lazychezmoi/internal/shell"
 )
 
 // Options controls recurring dashboard preferences.
-type Options struct{ AutoFetch, Color bool }
+type Options struct {
+	AutoFetch, Color, Mouse bool
+	Diff                    diffview.Options
+	Search                  *search.Service
+}
 
 type backend interface {
 	Invalidate()
@@ -33,10 +42,10 @@ type backend interface {
 
 // Run opens the dashboard. Construction does no filesystem or subprocess work.
 func Run(ctx context.Context, service *chezmoi.Service, opts Options) error {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	m := newModel(ctx, service, opts)
-	result, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	result, err := newProgram(ctx, m).Run()
 	if err != nil {
 		return err
 	}
@@ -46,24 +55,41 @@ func Run(ctx context.Context, service *chezmoi.Service, opts Options) error {
 	return nil
 }
 
+// The caller's context owns signal cancellation. Tea 2.0.9's separate signal
+// goroutine can block sending QuitMsg after that context stops the event loop,
+// which deadlocks terminal restoration while shutdown waits for the goroutine.
+func newProgram(ctx context.Context, m tea.Model, extra ...tea.ProgramOption) *tea.Program {
+	opts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithoutSignalHandler()}
+	return tea.NewProgram(m, append(opts, extra...)...)
+}
+
 type listState struct {
-	entries                []chezmoi.Entry
-	query                  string
-	changed                bool
-	selected, top          int
-	checked                map[string]bool
-	loaded, loading, stale bool
-	err                    string
-	gen                    uint64
-	cancel                 context.CancelFunc
-	view                   int
-	preview                string
-	previewID              string
-	previewLoading         bool
-	previewErr             string
-	previewGen             uint64
-	previewCancel          context.CancelFunc
-	scroll                 int
+	entries                  []chezmoi.Entry
+	query                    string
+	changed                  bool
+	selected, top            int
+	checked                  map[string]bool
+	loaded, loading, stale   bool
+	err                      string
+	gen                      uint64
+	cancel                   context.CancelFunc
+	view                     int
+	preview                  string
+	previewID                string
+	previewLoading           bool
+	previewErr               string
+	previewGen               uint64
+	previewCancel            context.CancelFunc
+	scroll                   int
+	rawDiff                  string
+	snapshot                 *chezmoi.DiffSnapshot
+	hunkReason               string
+	hunkMode                 bool
+	hunkIndex                int
+	renderGen                uint64
+	renderCancel             context.CancelFunc
+	renderWarning            string
+	renderLayout, renderName string
 }
 
 type pendingOperation struct {
@@ -75,6 +101,9 @@ type pendingOperation struct {
 	reset, applyAfterReset, reload bool
 	started                        time.Time
 	resetDone                      bool
+	snapshot                       *chezmoi.DiffSnapshot
+	hunkID, direction, searchPath  string
+	undo                           *chezmoi.CopyReceipt
 }
 
 type dialog struct {
@@ -122,6 +151,14 @@ type model struct {
 	prefix              bool
 	prefixGen           uint64
 	reload              bool
+	owner               *chezmoi.Service
+	searcher            searchBackend
+	search              searchState
+	maximized           bool
+	pressed             *hitTarget
+	lastCopy            *chezmoi.CopyReceipt
+	renderer            func(context.Context, string, diffview.Options) (diffview.Result, error)
+	backgroundDark      bool
 }
 
 type scopeMsg struct {
@@ -140,6 +177,8 @@ type previewMsg struct {
 	gen               uint64
 	id, view, content string
 	err               error
+	snapshot          *chezmoi.DiffSnapshot
+	hunkReason        string
 }
 type gitMsg struct {
 	gen uint64
@@ -188,6 +227,14 @@ var previewViews = []string{"source", "current", "rendered", "diff"}
 
 func newModel(ctx context.Context, service backend, opts Options) *model {
 	m := &model{ctx: ctx, service: service, opts: opts, width: 100, height: 28, status: "Loading local source…"}
+	m.owner, _ = service.(*chezmoi.Service)
+	m.searcher = opts.Search
+	if opts.Search == nil {
+		m.searcher = search.New(search.Options{})
+	}
+	m.search.scope = "source"
+	m.renderer = diffview.Render
+	m.backgroundDark = true
 	for i := range m.lists {
 		m.lists[i].checked = make(map[string]bool)
 	}
@@ -196,6 +243,9 @@ func newModel(ctx context.Context, service backend, opts Options) *model {
 
 func (m *model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.loadScope(), m.loadEntries(0), m.loadGit()}
+	if m.opts.Diff.Theme == "" || m.opts.Diff.Theme == "auto" {
+		cmds = append(cmds, tea.RequestBackgroundColor)
+	}
 	if m.opts.AutoFetch {
 		cmds = append(cmds, m.fetch())
 	}
@@ -264,6 +314,11 @@ func (m *model) loadPreview() tea.Cmd {
 	if s.previewID != e.ID {
 		s.preview = ""
 		s.scroll = 0
+		s.rawDiff = ""
+		s.snapshot = nil
+		s.hunkReason = ""
+		s.hunkIndex = 0
+		s.renderGen++
 	}
 	s.previewID = e.ID
 	if m.pending != nil {
@@ -277,11 +332,14 @@ func (m *model) loadPreview() tea.Cmd {
 	gen, view, service, color := s.previewGen, previewViews[s.view], m.service, m.opts.Color
 	return func() tea.Msg {
 		defer cancel()
+		if view == "diff" {
+			return m.readDiff(ctx, tab, gen, e)
+		}
 		content, err := service.Preview(ctx, e, view)
 		if err == nil {
 			content = highlight(content, e, view, color)
 		}
-		return previewMsg{tab, gen, e.ID, view, content, err}
+		return previewMsg{tab: tab, gen: gen, id: e.ID, view: view, content: content, err: err}
 	}
 }
 
@@ -350,6 +408,9 @@ func (m *model) report(message string, failed bool) {
 }
 
 func (m *model) invalidate() {
+	m.pressed = nil
+	m.cancelSearch()
+	m.search.stale = len(m.search.result.Matches) > 0
 	m.scopeGen++
 	m.gitGen++
 	m.gitStale = m.gitLoaded
@@ -357,6 +418,11 @@ func (m *model) invalidate() {
 		s := &m.lists[i]
 		s.gen++
 		s.previewGen++
+		s.renderGen++
+		if s.renderCancel != nil {
+			s.renderCancel()
+		}
+		s.snapshot = nil
 		s.stale = s.loaded
 		s.loading = false
 		s.previewLoading = false
@@ -383,13 +449,18 @@ func (m *model) refresh() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, handled := m.featureMessage(msg); handled {
+		return m, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.pressed = nil
 		m.width = max(1, msg.Width)
 		m.height = max(1, msg.Height)
 		if m.dialog != nil {
 			m.dialog.input.SetWidth(max(1, m.width-8))
 		}
+		return m, m.rerenderDiffs()
 	case scopeMsg:
 		if msg.gen != m.scopeGen {
 			return m, nil
@@ -405,6 +476,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != s.gen {
 			return m, nil
 		}
+		m.pressed = nil
 		s.loading = false
 		if msg.err != nil && len(msg.entries) == 0 {
 			s.err = msg.err.Error()
@@ -463,6 +535,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			s.previewErr = msg.err.Error()
 		} else {
+			if msg.view == "diff" {
+				s.rawDiff = msg.content
+				s.snapshot = msg.snapshot
+				s.hunkReason = msg.hunkReason
+				s.hunkIndex = min(s.hunkIndex, max(0, hunkCount(s)-1))
+				return m, m.renderCachedDiff(msg.tab)
+			}
 			s.preview = msg.content
 			s.previewErr = ""
 		}
@@ -569,18 +648,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
 	case tea.PasteMsg:
-		if m.dialog != nil && (m.dialog.kind == "filter" || m.dialog.kind == "palette") {
+		if m.dialog != nil && (m.dialog.kind == "filter" || m.dialog.kind == "palette" || m.dialog.kind == "search") {
 			msg.Content = strings.NewReplacer("\n", " ", "\r", " ").Replace(sanitize(msg.Content))
 			return m, m.updateInput(msg)
 		}
 	}
-	if m.dialog != nil && (m.dialog.kind == "filter" || m.dialog.kind == "palette") {
+	if m.dialog != nil && (m.dialog.kind == "filter" || m.dialog.kind == "palette" || m.dialog.kind == "search") {
 		return m, m.updateInput(msg)
 	}
 	return m, nil
 }
 
 func (m *model) move(delta int) tea.Cmd {
+	m.pressed = nil
+	if m.tab == 3 {
+		return m.moveSearch(delta)
+	}
 	if m.detail && m.tab < 2 {
 		s := &m.lists[m.tab]
 		s.scroll = max(0, min(s.scroll+delta, max(0, strings.Count(s.preview, "\n"))))
@@ -601,6 +684,7 @@ func (m *model) move(delta int) tea.Cmd {
 }
 
 func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
+	m.pressed = nil
 	k := key.String()
 	if m.dialog != nil {
 		return m.dialogKey(key)
@@ -619,15 +703,9 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	}
 	switch k {
 	case "1", "2", "3":
-		m.tab = int(k[0] - '1')
-		m.detail = false
-		if m.tab < 2 {
-			if !m.lists[m.tab].loaded {
-				return m.loadEntries(m.tab)
-			}
-			return m.loadPreview()
-		}
-		return nil
+		return m.switchTab(int(k[0] - '1'))
+	case "4":
+		return m.switchTab(3)
 	case "tab", "shift+tab":
 		m.detail = !m.detail
 		return nil
@@ -659,6 +737,10 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		gen := m.prefixGen
 		return tea.Tick(time.Second, func(time.Time) tea.Msg { return prefixExpiredMsg{gen} })
 	case "esc":
+		if m.maximized {
+			m.maximized = false
+			return m.rerenderDiffs()
+		}
 		m.detail = false
 		return nil
 	case "enter":
@@ -680,6 +762,7 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *model) openInput(kind string) tea.Cmd {
+	m.pressed = nil
 	in := textinput.New()
 	in.Prompt = "/ "
 	in.Placeholder = "Filter targets"
@@ -691,6 +774,10 @@ func (m *model) openInput(kind string) tea.Cmd {
 	if kind == "palette" {
 		in.Prompt = ": "
 		in.Placeholder = "Find an action"
+	} else if kind == "search" {
+		in.Prompt = "Search: "
+		in.Placeholder = "Keywords · Enter accepts"
+		in.SetValue(m.search.text)
 	} else {
 		m.detail = false
 		in.SetValue(m.lists[m.tab].query)
@@ -706,6 +793,10 @@ func (m *model) updateInput(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	d.input, cmd = d.input.Update(msg)
 	if d.input.Value() != old {
+		if d.kind == "search" {
+			m.search.text = d.input.Value()
+			return tea.Batch(cmd, m.scheduleSearch())
+		}
 		if d.kind == "filter" {
 			s := &m.lists[m.tab]
 			s.query = d.input.Value()
@@ -720,6 +811,7 @@ func (m *model) updateInput(msg tea.Msg) tea.Cmd {
 }
 
 func (m *model) closeDialog() {
+	m.pressed = nil
 	if m.dialog != nil && m.dialog.cancel != nil {
 		m.dialog.cancel()
 	}
@@ -744,6 +836,19 @@ func (m *model) dialogKey(key tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	switch d.kind {
+	case "search":
+		if k == "enter" {
+			m.closeDialog()
+			m.detail = false
+			return m.startSearch()
+		}
+		if k == "up" {
+			return m.moveSearch(-1)
+		}
+		if k == "down" {
+			return m.moveSearch(1)
+		}
+		return m.updateInput(key)
 	case "filter":
 		if k == "enter" {
 			m.closeDialog()
@@ -859,6 +964,9 @@ func (m *model) beginOperation(op *pendingOperation) tea.Cmd {
 func (m *model) prepareOperation() tea.Cmd {
 	op := *m.pending
 	service, ctx := m.service, m.ctx
+	if cmd, ok := m.prepareFeatureOperation(op); ok {
+		return cmd
+	}
 	if op.reset {
 		return func() tea.Msg { return resetMsg{op.id, service.ResetScript(ctx, op.entry, op.records)} }
 	}
@@ -895,6 +1003,9 @@ func (m *model) completeOperation(id uint64, err error) tea.Cmd {
 		m.lists[m.tab].view = 3
 	}
 	cmds := []tea.Cmd{m.refresh()}
+	if m.search.text != "" {
+		cmds = append(cmds, m.scheduleSearch())
+	}
 	if op.op.Kind == "script-apply" && !op.started.IsZero() {
 		service, ctx := m.service, m.ctx
 		cmds = append(cmds, func() tea.Msg {

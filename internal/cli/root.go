@@ -14,6 +14,8 @@ import (
 
 	"github.com/daviddwlee84/lazychezmoi/internal/chezmoi"
 	"github.com/daviddwlee84/lazychezmoi/internal/config"
+	"github.com/daviddwlee84/lazychezmoi/internal/diffview"
+	"github.com/daviddwlee84/lazychezmoi/internal/search"
 	"github.com/daviddwlee84/lazychezmoi/internal/shell"
 	"github.com/daviddwlee84/lazychezmoi/internal/tui"
 	"github.com/spf13/cobra"
@@ -56,9 +58,28 @@ func buildVersion(injected, module string) string {
 }
 
 type app struct {
-	path, color string
-	autoFetch   bool
-	options     chezmoi.Options
+	path, color             string
+	autoFetch, mouse        bool
+	delta, rg               string
+	renderer, layout, theme string
+	options                 chezmoi.Options
+}
+
+type choiceValue struct {
+	value   *string
+	choices []string
+}
+
+func (v choiceValue) String() string { return *v.value }
+func (v choiceValue) Type() string   { return "string" }
+func (v choiceValue) Set(value string) error {
+	for _, valid := range v.choices {
+		if value == valid {
+			*v.value = value
+			return nil
+		}
+	}
+	return fmt.Errorf("must be one of %s", strings.Join(v.choices, ", "))
 }
 
 type colorValue struct{ value *string }
@@ -77,7 +98,7 @@ func New(version string) *cobra.Command {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		version = buildVersion(version, info.Main.Version)
 	}
-	a := &app{color: "auto"}
+	a := &app{color: "auto", renderer: "auto", layout: "auto", theme: "auto"}
 	root := &cobra.Command{
 		Use: "lazychezmoi", Short: "A keyboard-first workbench for chezmoi",
 		Long:    "Edit, preview, apply and update your dotfiles. Bare lazychezmoi opens the dashboard in an interactive terminal; otherwise it prints help.",
@@ -103,7 +124,16 @@ func New(version string) *cobra.Command {
 	flags.StringVar(&a.options.GitBinary, "git", "", "Git executable")
 	flags.Var(colorValue{&a.color}, "color", "color: auto, always, never")
 	flags.BoolVar(&a.autoFetch, "auto-fetch", true, "fetch once when opening the dashboard")
+	flags.BoolVar(&a.mouse, "mouse", true, "enable mouse interaction in the dashboard (m toggles it)")
+	flags.StringVar(&a.delta, "delta", "", "optional delta executable")
+	flags.StringVar(&a.rg, "rg", "", "optional ripgrep executable for content search")
+	flags.Var(choiceValue{&a.renderer, []string{"auto", "builtin", "delta"}}, "diff-renderer", "dashboard diff renderer: auto, builtin, delta")
+	flags.Var(choiceValue{&a.layout, []string{"auto", "unified", "side-by-side"}}, "diff-layout", "dashboard delta layout: auto, unified, side-by-side")
+	flags.Var(choiceValue{&a.theme, []string{"auto", "dark", "light"}}, "diff-theme", "diff colors: auto, dark, light")
 	root.RegisterFlagCompletionFunc("color", enum("auto", "always", "never"))
+	root.RegisterFlagCompletionFunc("diff-renderer", enum("auto", "builtin", "delta"))
+	root.RegisterFlagCompletionFunc("diff-layout", enum("auto", "unified", "side-by-side"))
+	root.RegisterFlagCompletionFunc("diff-theme", enum("auto", "dark", "light"))
 	root.AddCommand(&cobra.Command{Use: "tui", Short: "Open the interactive dashboard", Args: args(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		if !interactive(cmd) {
 			return usage("tui requires terminal input and output")
@@ -111,6 +141,7 @@ func New(version string) *cobra.Command {
 		return a.dashboard(cmd)
 	}})
 	root.AddCommand(a.statusCommand(), a.filesCommand(false), a.previewCommand(), a.scriptsCommand())
+	root.AddCommand(a.searchCommand(), a.hunksCommand(), a.copyHunkCommand())
 	for _, kind := range []string{"edit", "apply", "fetch", "update", "init", "re-add", "lazygit"} {
 		root.AddCommand(a.operationCommand(kind))
 	}
@@ -182,6 +213,24 @@ func (a *app) settings(cmd *cobra.Command) (config.Config, string, error) {
 	if cmd.Flags().Changed("git") {
 		cfg.Tools.Git = a.options.GitBinary
 	}
+	if cmd.Flags().Changed("delta") {
+		cfg.Tools.Delta = a.delta
+	}
+	if cmd.Flags().Changed("rg") {
+		cfg.Tools.RG = a.rg
+	}
+	if cmd.Flags().Changed("mouse") {
+		cfg.Mouse = a.mouse
+	}
+	if cmd.Flags().Changed("diff-renderer") {
+		cfg.Diff.Renderer = a.renderer
+	}
+	if cmd.Flags().Changed("diff-layout") {
+		cfg.Diff.Layout = a.layout
+	}
+	if cmd.Flags().Changed("diff-theme") {
+		cfg.Diff.Theme = a.theme
+	}
 	if err := config.Validate(cfg); err != nil {
 		return cfg, path, usageError{err}
 	}
@@ -209,7 +258,13 @@ func (a *app) dashboard(cmd *cobra.Command) error {
 		return err
 	}
 	color := cfg.Color == "always" || cfg.Color == "auto" && os.Getenv("NO_COLOR") == ""
-	return tui.Run(cmd.Context(), service, tui.Options{AutoFetch: cfg.AutoFetch, Color: color})
+	return tui.Run(cmd.Context(), service, tui.Options{AutoFetch: cfg.AutoFetch, Color: color, Mouse: cfg.Mouse,
+		Diff: diffOptions(cfg), Search: search.New(search.Options{RG: cfg.Tools.RG})})
+}
+
+func diffOptions(cfg config.Config) diffview.Options {
+	return diffview.Options{Renderer: cfg.Diff.Renderer, Layout: cfg.Diff.Layout, Theme: cfg.Diff.Theme,
+		SyntaxTheme: cfg.Diff.SyntaxTheme, Delta: cfg.Tools.Delta}
 }
 
 func jsonOut(w io.Writer, value any) error {
@@ -299,12 +354,25 @@ func (a *app) filesCommand(scripts bool) *cobra.Command {
 }
 
 func (a *app) previewCommand() *cobra.Command {
-	var view string
+	var view, renderer, layout string
+	var width int
 	c := &cobra.Command{Use: "preview TARGET", Short: "Print source, current, rendered content or native diff", Args: args(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, values []string) error {
 		if view != "source" && view != "current" && view != "rendered" && view != "diff" {
 			return usage("view must be source, current, rendered, or diff")
 		}
-		service, _, err := a.service(cmd)
+		if renderer != "raw" && renderer != "auto" && renderer != "builtin" && renderer != "delta" {
+			return usage("renderer must be raw, auto, builtin, or delta")
+		}
+		if layout != "auto" && layout != "unified" && layout != "side-by-side" {
+			return usage("layout must be auto, unified, or side-by-side")
+		}
+		if width < 0 || width > 4096 {
+			return usage("width must be between 1 and 4096, or 0 for automatic")
+		}
+		if view != "diff" && (cmd.Flags().Changed("renderer") || cmd.Flags().Changed("layout") || cmd.Flags().Changed("width")) {
+			return usage("renderer, layout and width options require --view=diff")
+		}
+		service, cfg, err := a.service(cmd)
 		if err != nil {
 			return err
 		}
@@ -316,11 +384,41 @@ func (a *app) previewCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if view == "diff" && renderer != "raw" {
+			opts := diffOptions(cfg)
+			opts.Renderer = renderer
+			if cmd.Flags().Changed("layout") {
+				opts.Layout = layout
+			}
+			opts.Width = width
+			if opts.Width == 0 {
+				opts.Width = 80
+				if f, ok := cmd.OutOrStdout().(*os.File); ok {
+					if w, _, e := term.GetSize(int(f.Fd())); e == nil && w > 0 {
+						opts.Width = w
+					}
+				}
+			}
+			opts.Color = cfg.Color == "always" || cfg.Color == "auto" && interactive(cmd) && os.Getenv("NO_COLOR") == ""
+			result, err := diffview.Render(cmd.Context(), content, opts)
+			if err != nil {
+				return err
+			}
+			if result.Warning != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), safeLine(result.Warning))
+			}
+			content = result.Text
+		}
 		_, err = io.WriteString(cmd.OutOrStdout(), content)
 		return err
 	}}
 	c.Flags().StringVar(&view, "view", "source", "source, current, rendered, or diff")
+	c.Flags().StringVar(&renderer, "renderer", "raw", "diff display: raw, auto, builtin, delta (raw preserves the original output)")
+	c.Flags().StringVar(&layout, "layout", "auto", "diff layout: auto, unified, side-by-side")
+	c.Flags().IntVar(&width, "width", 0, "formatted diff width; 0 uses terminal width or 80 columns")
 	c.RegisterFlagCompletionFunc("view", enum("source", "current", "rendered", "diff"))
+	c.RegisterFlagCompletionFunc("renderer", enum("raw", "auto", "builtin", "delta"))
+	c.RegisterFlagCompletionFunc("layout", enum("auto", "unified", "side-by-side"))
 	return c
 }
 

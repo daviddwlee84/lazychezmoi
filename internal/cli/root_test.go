@@ -34,6 +34,12 @@ func TestEntryIntent(t *testing.T) {
 		{[]string{"preview", "file", "--view", "typo"}, "", 2},
 		{[]string{"--bad-flag"}, "", 2},
 		{[]string{"--color=typo"}, "", 2},
+		{[]string{"--diff-renderer=typo"}, "", 2},
+		{[]string{"search", "text", "--scope=rendered"}, "", 2},
+		{[]string{"search", ""}, "", 2},
+		{[]string{"copy-hunk", "file", "--id=h", "--direction=source-to-current"}, "", 2},
+		{[]string{"preview", "file", "--renderer=delta"}, "", 2},
+		{[]string{"preview", "file", "--view=diff", "--width=-1"}, "", 2},
 		{[]string{"scripts"}, "Available Commands:", 0},
 		{[]string{"config"}, "Available Commands:", 0},
 		{[]string{"version"}, "test-version", 0},
@@ -95,5 +101,28 @@ func TestVersionPrecedence(t *testing.T) {
 		if got := buildVersion(v.injected, v.module); got != v.want {
 			t.Fatalf("%+v: %s", v, got)
 		}
+	}
+}
+
+func TestMouseAndDiffFlagOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("mouse=true\n[diff]\nrenderer='delta'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := invoke(t, "--config", path, "--mouse=false", "--diff-renderer=builtin", "config", "show", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Mouse bool `json:"mouse"`
+		Diff  struct {
+			Renderer string `json:"renderer"`
+		} `json:"diff"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Mouse || result.Diff.Renderer != "builtin" {
+		t.Fatalf("bad override: %s", out)
 	}
 }

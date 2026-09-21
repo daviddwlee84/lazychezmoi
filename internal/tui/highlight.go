@@ -2,8 +2,11 @@ package tui
 
 import (
 	"bytes"
+	"charm.land/lipgloss/v2"
+	"github.com/daviddwlee84/lazychezmoi/internal/search"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -28,6 +31,28 @@ func sanitize(s string) string {
 		}
 		return r
 	}, s)
+}
+
+func highlightMatch(line string, spans []search.Span, color bool) string {
+	spans = append([]search.Span{}, spans...)
+	sort.Slice(spans, func(i, j int) bool { return spans[i].Start < spans[j].Start })
+	var b strings.Builder
+	position := 0
+	clean := func(s string) string { return strings.ReplaceAll(sanitize(s), "\t", "    ") }
+	for _, span := range spans {
+		if span.Start < position || span.Start < 0 || span.End < span.Start || span.End > len(line) {
+			continue
+		}
+		b.WriteString(clean(line[position:span.Start]))
+		match := clean(line[span.Start:span.End])
+		if color {
+			match = lipgloss.NewStyle().Background(lipgloss.Color("3")).Foreground(lipgloss.Color("0")).Render(match)
+		}
+		b.WriteString(match)
+		position = span.End
+	}
+	b.WriteString(clean(line[position:]))
+	return b.String()
 }
 
 func singleLine(s string) string {

@@ -24,12 +24,20 @@ jobs:
           python-version: '3.12'
       - name: Install fixture backend
         run: go install github.com/twpayne/chezmoi/v2@v2.69.4
+      - name: Install diff and search test tools (Linux/Windows)
+        if: runner.os != 'macOS'
+        run: python scripts/install_ci_tools.py
+      - name: Install diff and search test tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ripgrep git-delta
       - name: Install Unix test shells
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh fish
       - name: Install ConPTY harness
         if: runner.os == 'Windows'
         run: python -m pip install pywinpty==3.0.2
+      - name: Install terminal screen assertions
+        run: python -m pip install pyte==0.8.2
       - name: Static analysis
         run: go vet ./...
       - name: Tests and races
@@ -42,3 +50,9 @@ jobs:
       - name: Terminal acceptance (Windows)
         if: runner.os == 'Windows'
         run: python scripts/pty_smoke.py build/lazychezmoi.exe
+      - name: Mouse, hunk and search acceptance (Unix)
+        if: runner.os != 'Windows'
+        run: python scripts/pty_features.py build/lazychezmoi
+      - name: Mouse, hunk and search acceptance (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/pty_features.py build/lazychezmoi.exe

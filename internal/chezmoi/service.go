@@ -35,15 +35,16 @@ type Context struct {
 }
 
 type Entry struct {
-	ID        string `json:"id"`
-	Target    string `json:"target"`
-	Source    string `json:"source"`
-	Relative  string `json:"relative"`
-	Kind      string `json:"kind"`
-	Template  bool   `json:"template"`
-	Encrypted bool   `json:"encrypted"`
-	Drift     string `json:"drift"`
-	Pending   string `json:"pending"`
+	ID            string `json:"id"`
+	Target        string `json:"target"`
+	Source        string `json:"source"`
+	Relative      string `json:"relative"`
+	Kind          string `json:"kind"`
+	Template      bool   `json:"template"`
+	Encrypted     bool   `json:"encrypted"`
+	ExactAncestor bool   `json:"exact_ancestor"`
+	Drift         string `json:"drift"`
+	Pending       string `json:"pending"`
 }
 
 type GitStatus struct {
@@ -68,6 +69,7 @@ type Service struct {
 	mu        sync.Mutex
 	fetchedAt time.Time
 	resetMu   sync.Mutex
+	copyMu    sync.Mutex
 }
 
 // New is deliberately free of filesystem, process, and network I/O.
@@ -243,6 +245,25 @@ type managedPaths struct {
 	SourceRelative string `json:"sourceRelative"`
 }
 
+// Inventory lists managed paths without evaluating file bodies for status.
+func (s *Service) Inventory(ctx context.Context, scripts bool) ([]Entry, error) {
+	return s.inventory(ctx, scripts)
+}
+
+func exactAncestor(sourceRelative string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Dir(sourceRelative)), "/") {
+		for _, prefix := range []string{"remove_", "external_", "exact_", "private_", "readonly_", "dot_"} {
+			if strings.HasPrefix(part, prefix) {
+				if prefix == "exact_" {
+					return true
+				}
+				part = strings.TrimPrefix(part, prefix)
+			}
+		}
+	}
+	return false
+}
+
 func (s *Service) inventory(ctx context.Context, scripts bool) ([]Entry, error) {
 	include, exclude := "files,symlinks,remove", "scripts,externals"
 	if scripts {
@@ -265,7 +286,7 @@ func (s *Service) inventory(ctx context.Context, scripts bool) ([]Entry, error) 
 		if scripts && !strings.HasPrefix(kind, "script") {
 			return nil, fmt.Errorf("unrecognized script attributes for %s", p.SourceRelative)
 		}
-		entries = append(entries, Entry{ID: p.Absolute, Target: p.Absolute, Source: p.SourceAbsolute, Relative: relative, Kind: kind, Template: template, Encrypted: encrypted})
+		entries = append(entries, Entry{ID: p.Absolute, Target: p.Absolute, Source: p.SourceAbsolute, Relative: relative, Kind: kind, Template: template, Encrypted: encrypted, ExactAncestor: exactAncestor(p.SourceRelative)})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Relative < entries[j].Relative })
 	return entries, nil
@@ -420,7 +441,7 @@ func (s *Service) Preview(ctx context.Context, e Entry, view string) (string, er
 		data, err := s.read(ctx, "cat", "--", e.Target)
 		return string(data), err
 	case "diff":
-		data, err := s.read(ctx, "diff", "--exclude=none", "--use-builtin-diff", "--", e.Target)
+		data, err := s.read(ctx, "diff", "--exclude=none", "--use-builtin-diff", "--reverse=false", "--", e.Target)
 		return string(data), err
 	default:
 		return "", fmt.Errorf("unknown preview %q", view)
@@ -465,6 +486,9 @@ func (s *Service) Command(ctx context.Context, op Operation) (*exec.Cmd, error) 
 			}
 			if op.Kind == "re-add" && (e.Kind != "file" || e.Template || e.Encrypted) {
 				return nil, fmt.Errorf("re-add requires a plain managed file; %s is %s", e.Relative, e.Kind)
+			}
+			if op.Kind == "re-add" && e.ExactAncestor {
+				return nil, fmt.Errorf("re-add is unavailable beneath exact_ directories because chezmoi can change siblings; copy a content hunk or edit %s instead", e.Relative)
 			}
 			if op.Kind == "script-apply" {
 				if !strings.HasPrefix(e.Kind, "script") {

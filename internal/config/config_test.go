@@ -70,3 +70,28 @@ func TestCreateDoesNotOverwrite(t *testing.T) {
 		t.Fatal("config changed")
 	}
 }
+
+func TestDiffAndMouseSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "mouse = false\n[diff]\nrenderer = 'builtin'\nlayout = 'side-by-side'\ntheme = 'light'\nsyntax_theme = 'GitHub'\n[tools]\ndelta = '/optional/delta'\nrg = '/optional/rg'\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mouse || cfg.Diff.Renderer != "builtin" || cfg.Diff.Theme != "light" || cfg.Tools.RG != "/optional/rg" {
+		t.Fatalf("settings lost: %+v", cfg)
+	}
+	if cfg.Tools.Chezmoi != "chezmoi" || !cfg.AutoFetch {
+		t.Fatalf("legacy defaults lost: %+v", cfg)
+	}
+	for _, mutate := range []func(*Config){func(c *Config) { c.Diff.Renderer = "bad" }, func(c *Config) { c.Diff.Layout = "bad" }, func(c *Config) { c.Diff.Theme = "bad" }} {
+		invalid := cfg
+		mutate(&invalid)
+		if Validate(invalid) == nil {
+			t.Fatal("accepted invalid diff setting")
+		}
+	}
+}

@@ -34,6 +34,7 @@ lazychezmoi --source /path/to/source --destination /path/to/destination \
 | 鍵 | 行為 |
 | --- | --- |
 | `1` / `2` / `3` | Files / Scripts / Maintenance |
+| `4`、`s` | Search 頁面／輸入內容查詢 |
 | `↑↓`、`jk`、`gg` / `G` | 選取、移到開頭／結尾 |
 | Tab / Shift+Tab、`h` / `l` | 切換清單與預覽焦點 |
 | `/` | 搜尋；Enter 接受搜尋，Esc 清除 |
@@ -42,6 +43,10 @@ lazychezmoi --source /path/to/source --destination /path/to/destination \
 | `a` | 套用選取檔案，排除 scripts；Scripts 頁則執行選定腳本 |
 | `A` | 檢視範圍後完整 apply，包含 scripts |
 | `v`、`[` / `]` | Source / Current / Rendered / Diff 預覽 |
+| `H`、`n` / `N` | 區塊模式／下一個或上一個 hunk |
+| `<` / `>` | 確認後 Source → Current／Current → Source 區塊複寫 |
+| `U`、`z` | Undo 最近一次區塊複寫／放大預覽 |
+| `m` | 切換滑鼠捕捉，關閉後可用終端原生選字 |
 | `f` | 背景 fetch，更新遠端資訊 |
 | `u` | `chezmoi update --init`：拉取、處理新問題、套用 |
 | `L` | 在目前 working tree 開 lazygit |
@@ -56,6 +61,31 @@ lazychezmoi --source /path/to/source --destination /path/to/destination \
 `.toml.tmpl` 的 Source 使用 TOML 加模板標記上色；`modify_` 的來源若為腳本，依 shebang／腳本類型上色，Rendered 依目標檔名上色。預覽不重新格式化檔案。原生 render／diff 可能執行模板函式或 hooks；渲染內容不持久快取。
 
 Maintenance 提供 native init、重新詢問既有參數（`init --prompt`）、編輯 chezmoi config／config template、用 editor 開 source tree、externals 更新、完整 context 與操作結果。Editor 沿用 chezmoi 的設定及 `VISUAL`／`EDITOR` 選擇。
+
+### Delta 與雙向區塊複寫
+
+Diff 預設自動使用 PATH 中的 `delta`。缺少、逾時或執行失敗會回退內建 unified diff，保留內容並顯示目前 renderer。預覽內寬至少 100 欄時可並排；較窄時降為 unified，`z` 可放大預覽。`NO_COLOR`／`--color=never` 使用內建無色顯示。可用 `--diff-renderer=builtin` 固定舊模式。
+
+一般部署差異清楚標示 **Before: Current → After: Rendered**。普通檔案的區塊模式則比較 **Current ↔ Source**。按 `H` 後用 `n/N` 或 Prev／Next 按鈕選區塊；`<` 把 Source 的區塊寫到 Current，`>` 把 Current 的區塊寫回 Source。確認畫面會顯示方向、接收檔案及確切區塊。
+
+區塊複寫只處理內容，不自動 apply、不執行 apply scripts、不更新 chezmoi state；部分 live 修改可能因此顯示為 drift，之後仍可使用原生 apply 完成部署。正常 native discovery／diff 仍保留 chezmoi 的 hooks 語義。為避免原生 re-add 在 `exact_` 目錄連帶更動 siblings，該情況會停用 re-add；符合條件的區塊複寫仍只改選定檔案。
+
+複寫限既存、彼此不同、未加密、非模板的普通 UTF-8 檔案。create／modify、symlink／hardlink、scripts、externals、二進位、新增／刪除檔案保留原生操作。每檔至多 2 MiB；超出差異計算上限時仍可查看 native diff。保留原始 LF／CRLF、BOM、最後換行與接收檔案權限。snapshot 過期或無法保留 metadata 時拒絕覆寫。
+
+`U` 只 Undo 本次 session 最近一次區塊複寫，且檔案必須仍與寫入後相同；不覆蓋外部的新修改。Undo 的內容保留在記憶體。替換使用同目錄 transaction scratch；Windows 遇到無法完整恢復的替換錯誤時，會保留 recovery 檔案並回報路徑，不刪除最後可恢復的內容。
+
+Delta 只負責顯示，複寫位置取自原始 snapshot，與顏色、wrap、視窗大小無關。lazychezmoi 控制 Delta 的 pager、width 與版面，不讀取 Git 中的 Delta 設定；可在自己的 `[diff]` 設定配色及 syntax theme。
+
+### 內容搜尋與滑鼠
+
+`/` 仍是目前 Files／Scripts 的檔名 filter。`s` 開啟獨立的 live grep：輸入停頓約 200ms 後搜尋，Enter 接受查詢並移到結果。使用 `rg`，預設 literal keyword＋smart case，也能透過 Regex 按鈕或 action 切換正則表达式。
+
+- **Source** 搜尋來源 repo，包含 `.chezmoitemplates` 等隱藏 helper，尊重 ignore 規則並排除 `.git`／`.specstory`。
+- **Current** 只搜尋受管且現存的普通檔案，不掃描整個 HOME；二進位、symlink 與不可讀取的項目會略過。
+- 結果顯示檔案、行號與命中內容；預覽定位並標示命中。`e` 編輯來源檔，helper 也能直接開啟；Current 行號不會誤套到模板原始碼。
+- 缺少 rg 會提示設定 `tools.rg`／安裝；結果上限 1,000 筆，截斷、部分失敗及舊查詢結果均有標示。Rendered 不做批次搜尋，搜尋內容不持久快取。
+
+滑鼠預設開啟：點列選取、checkbox 多選、點頁籤／預覽標籤切換、右鍵開情境選單，滾輪作用於游標所在 pane。區塊、Review／Confirm／Cancel 都有可點按鈕；modal 不會讓點擊穿透。`m` 或 `--mouse=false` 關閉捕捉。
 
 ## CLI
 
@@ -74,7 +104,16 @@ lazychezmoi update --init=false
 lazychezmoi init --prompt               # 重新詢問舊答案，不自動 apply
 lazychezmoi init --prompt --promptBool 'Exact prompt text=false'
 lazychezmoi re-add ~/.config/plain-file
+lazychezmoi search 'editor' --scope source --json
+lazychezmoi search 'theme.*dark' --scope current --regex
+lazychezmoi hunks ~/.config/plain-file --json
+lazychezmoi copy-hunk ~/.config/plain-file --id REVIEWED_HUNK_ID \
+  --direction source-to-current --yes
+lazychezmoi preview ~/.config/foo/config.toml --view diff \
+  --renderer delta --layout side-by-side --width 120 --color always
 ```
+
+`preview --view diff` 預設保持原始 patch 輸出；只有明確指定 `--renderer` 才格式化。`copy-hunk` 的 ID 綁定兩端 snapshot，任何相關變更都需要重新取得 ID；CLI 不保存 Undo 紀錄。
 
 bare `lazychezmoi` 在非 TTY 顯示 help；明確 `tui`、editor 或 shell reload 必須有互動終端。非互動原生操作使用 `--no-tty`；需要回答 init 問題時使用明確的 `--promptBool`／`--promptString`／`--promptInt`／`--promptChoice`／`--promptMultichoice`，或明確選用 `--promptDefaults`。
 
@@ -152,10 +191,19 @@ Unix 預設 `~/.config/lazychezmoi/config.toml`，Windows 預設 roaming AppData
 ```toml
 auto_fetch = true
 color = "auto"                        # auto / always / never；auto 尊重 NO_COLOR
+mouse = true
+
+[diff]
+renderer = "auto"                     # auto / builtin / delta
+layout = "auto"                       # auto / unified / side-by-side
+theme = "auto"                        # auto / dark / light
+# syntax_theme = "GitHub"             # optional Delta syntax theme
 
 [tools]
 chezmoi = "chezmoi"
 git = "git"
+delta = "delta"                       # optional; missing tool falls back
+rg = "rg"                             # required only for content search
 ```
 
 用 `lazychezmoi completion bash|zsh|fish|powershell` 產生原生補全。補全與 help 不會讀取 chezmoi、渲染模板或連網。Zsh 範例（目錄須在 shell 的 `fpath` 並在 `compinit` 前設定）：
@@ -174,10 +222,11 @@ go vet ./...
 go test -race ./...
 go build -o build/ .
 python3 scripts/pty_smoke.py build/lazychezmoi
+uv run --no-project --with pyte==0.8.2 python scripts/pty_features.py build/lazychezmoi
 ```
 
 chezmoi 整合測試使用獨立 source、config、destination、cache 和 state，不套用到使用者家目錄。未安裝 chezmoi 的環境會略過相應測試；CI 安裝固定的 2.69.4 來執行。Shell tests 使用可取得的 Bash、Zsh、Fish 與 PowerShell，驗證 caller scope、參數、失敗及 reload。
 
-CI 包含 macOS／Linux／Windows 的 vet、race tests、build 和真實 PTY／ConPTY editor→apply 驗收。Windows 的 Python harness 需要 `pywinpty`。本機跨編譯只能證明編譯成功，不能代替原生 Windows 終端驗收。
+CI 包含 macOS／Linux／Windows 的 vet、race tests、build 和真實 PTY／ConPTY editor→apply、mouse、hunk→Undo、live grep 驗收。Windows 的 Python harness 需要 `pywinpty`；feature harness 使用 `pyte` 檢查 ASCII 介面控制，Unicode 寬度另有 Go 測試。CI 準備 rg／delta，使相關測試實際執行。本機跨編譯只能證明編譯成功，不能代替原生 Windows 終端驗收。
 
-程式分成 `internal/chezmoi`（共享操作）、`internal/tui`（模型／action registry／預覽）、`internal/cli`（命令介面）、`internal/config` 與 `internal/shell`。介面建立不執行 I/O；非同步結果依 request generation 接受，寫入結束後重新取得狀態。
+程式分成 `internal/chezmoi`（共享操作／hunk snapshots）、`internal/diffview`（delta／內建 renderer）、`internal/search`（rg／結果預覽）、`internal/tui`（模型／action registry／共用 layout）、`internal/cli`（命令介面）、`internal/config` 與 `internal/shell`。介面建立不執行 I/O；非同步結果依 request generation 接受，寫入結束後重新取得狀態。

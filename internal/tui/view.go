@@ -28,16 +28,16 @@ func (m *model) View() tea.View {
 	if m.scopeErr != "" {
 		rows[1] = m.paint(errorText(m.scopeErr), "1")
 	}
-	tabs := []string{"1 Files", "2 Scripts", "3 Maintenance"}
+	tabs := m.tabLabels()
 	for i := range tabs {
 		if i == m.tab {
-			tabs[i] = "[" + tabs[i] + "]"
 			tabs[i] = m.paint(tabs[i], "6")
 		}
 	}
 	rows = append(rows, strings.Join(tabs, "   ")+"   Tab: focus  v: preview")
-	bodyHeight := max(1, h-6)
-	if m.dialog != nil && m.dialog.kind != "filter" {
+	layout := m.layout()
+	bodyHeight := layout.Body.H
+	if m.dialog != nil && m.dialog.kind != "filter" && m.dialog.kind != "search" {
 		rows = append(rows, m.dialogView(w, bodyHeight)...)
 	} else {
 		rows = append(rows, m.body(w, bodyHeight)...)
@@ -53,7 +53,7 @@ func (m *model) View() tea.View {
 		status = m.paint("ERROR · "+status, "1")
 	}
 	rows = append(rows, status, m.footer())
-	if m.dialog != nil && m.dialog.kind == "filter" {
+	if m.dialog != nil && (m.dialog.kind == "filter" || m.dialog.kind == "search") {
 		rows = append(rows, m.inputView()+"  Enter: accept · Esc: clear")
 	}
 	for len(rows) < h {
@@ -67,6 +67,9 @@ func (m *model) View() tea.View {
 	}
 	v := tea.NewView(strings.Join(rows, "\n"))
 	v.AltScreen = true
+	if m.opts.Mouse {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 
@@ -114,14 +117,15 @@ func (m *model) header() string {
 }
 
 func (m *model) body(width, height int) []string {
-	if width < 80 {
-		if m.detail {
+	l := m.layout()
+	if l.List.W == 0 || l.Detail.W == 0 {
+		if l.Detail.W > 0 {
 			return m.detailPane(width, height)
 		}
 		return m.listPane(width, height)
 	}
-	left := max(26, width/3)
-	right := width - left
+	left := l.List.W
+	right := l.Detail.W
 	lrows, rrows := m.listPane(left, height), m.detailPane(right, height)
 	result := make([]string, height)
 	for i := range result {
@@ -163,7 +167,10 @@ func (m *model) pane(title string, lines []string, width, height int, focused bo
 	return result
 }
 
-func (m *model) listPane(width, height int) []string {
+func (m *model) listContent(width, height int) paneContent {
+	if m.tab == 3 {
+		return m.searchListContent(width, height)
+	}
 	if m.tab == 2 {
 		var lines []string
 		for i, id := range maintenanceActions {
@@ -190,7 +197,11 @@ func (m *model) listPane(width, height int) []string {
 			lines = append(lines, line)
 		}
 		top := max(0, m.maintenanceSelected-max(1, height-2)+1)
-		return m.pane("Maintenance", lines[min(top, len(lines)):], width, height, !m.detail)
+		var hits []rowHit
+		for i := top; i < len(maintenanceActions); i++ {
+			hits = append(hits, rowHit{Line: i - top, Index: i, ID: maintenanceActions[i]})
+		}
+		return paneContent{Title: "Maintenance", Lines: lines[min(top, len(lines)):], Rows: hits}
 	}
 	s := &m.lists[m.tab]
 	entries := s.visible()
@@ -205,6 +216,7 @@ func (m *model) listPane(width, height int) []string {
 		title += " · stale"
 	}
 	var lines []string
+	var hits []rowHit
 	if s.query != "" {
 		lines = append(lines, "filter: "+singleLine(s.query))
 	}
@@ -263,6 +275,7 @@ func (m *model) listPane(width, height int) []string {
 			if e.Kind == "create" {
 				label += " [create only]"
 			}
+			hits = append(hits, rowHit{Line: len(lines), Index: i, ID: e.ID})
 			line := marker + check + state + label
 			if i == s.selected {
 				line = m.paint(line, "6")
@@ -270,10 +283,13 @@ func (m *model) listPane(width, height int) []string {
 			lines = append(lines, line)
 		}
 	}
-	return m.pane(title, lines, width, height, !m.detail)
+	return paneContent{Title: title, Lines: lines, Rows: hits}
 }
 
 func (m *model) detailPane(width, height int) []string {
+	if m.tab == 3 {
+		return m.searchDetailPane(width, height)
+	}
 	if m.tab == 2 {
 		text := maintenanceDescription(maintenanceActions[m.maintenanceSelected])
 		lines := wrap(text, max(1, width-4))
@@ -288,8 +304,7 @@ func (m *model) detailPane(width, height int) []string {
 	}
 	s := &m.lists[m.tab]
 	e, ok := m.selectedEntry()
-	labels := []string{"Source", "Current", "Rendered", "Diff"}
-	labels[s.view] = "[" + labels[s.view] + "]"
+	labels := m.previewLabels()
 	title := strings.Join(labels, " · ")
 	var lines []string
 	if !ok {
@@ -314,6 +329,35 @@ func (m *model) detailPane(width, height int) []string {
 			flags += " · encrypted source (ciphertext)"
 		}
 		lines = append(lines, flags)
+		if s.view == 3 {
+			after := "Rendered"
+			if s.snapshot != nil {
+				after = "Source"
+			}
+			labels := "Before: Current → After: " + after
+			if s.renderLayout == "side-by-side" {
+				labels = fit("Before: Current", max(1, (width-2)/2)) + "After: " + after
+			}
+			lines = append(lines, labels, "Renderer: "+singleLine(s.renderName)+" · "+singleLine(s.renderLayout))
+			if s.hunkMode {
+				if hunkCount(s) > 0 {
+					lines = append(lines, m.hunkControlLines()...)
+					lines = append(lines, singleLine(s.snapshot.Hunks[s.hunkIndex].Header))
+				} else if s.hunkReason != "" {
+					lines = append(lines, "Copy unavailable: "+singleLine(s.hunkReason))
+				} else {
+					lines = append(lines, "No text hunks to copy")
+				}
+			}
+			if s.snapshot != nil {
+				for _, note := range s.snapshot.Notes {
+					lines = append(lines, singleLine(note))
+				}
+			}
+			if s.renderWarning != "" {
+				lines = append(lines, singleLine(s.renderWarning))
+			}
+		}
 		if s.previewLoading {
 			lines = append(lines, "Loading preview…")
 		}
@@ -336,6 +380,8 @@ func (m *model) detailPane(width, height int) []string {
 func (m *model) footer() string {
 	if m.dialog != nil {
 		switch m.dialog.kind {
+		case "search":
+			return "Typing searches · ↑↓ select · Enter accepts · Esc leaves input"
 		case "filter":
 			return "↑↓ select · text filters · Enter accept · Esc clear"
 		case "palette":
@@ -351,7 +397,7 @@ func (m *model) footer() string {
 	var hints []string
 	for _, a := range m.actions() {
 		if a.footer && a.enabled {
-			label := map[string]string{"edit": "edit", "apply": "apply", "script-apply": "apply script", "fetch": "fetch", "update": "update", "lazygit": "lazygit", "palette": "actions", "help": "help"}[a.id]
+			label := footerLabel(a.id)
 			hints = append(hints, a.key+" "+label)
 		}
 	}
@@ -372,6 +418,8 @@ func (m *model) footer() string {
 }
 
 func (m *model) dialogView(width, height int) []string {
+	originalHeight := height
+	height = max(1, height-1)
 	d := m.dialog
 	title := ""
 	var lines []string
@@ -402,6 +450,7 @@ func (m *model) dialogView(width, height int) []string {
 	case "help":
 		title = "Help · current context"
 		lines = []string{"↑↓ / j k  Select / scroll     h l / ←→  Focus pane", "Tab / Shift+Tab  Focus pane   1 / 2 / 3  Switch view", "gg / Home  First   G / End  Last   PgUp/PgDn  Page", "/ filters; Enter accepts the filter without opening a target", "Space marks files; apply includes marked files hidden by a filter", "Δ means local drift or pending apply; Git state is separate", "v / [ / ] changes Source, Current, Rendered and Diff", "Rendered / Diff may execute template helpers or access externals", "A applies all, including scripts; a on Files excludes scripts", "q / Ctrl+C exits; Esc closes the nearest interaction", "", "Available actions:"}
+		lines = append([]string{"m toggles mouse capture; disable it for terminal text selection", "Mouse: click selects; wheel scrolls hovered pane; right click opens actions", "4 / s: content search · Source / Current · literal or regex", "H: hunk picker · n/N: next/previous · < Source→Current · > Current→Source", "U: undo last hunk copy · z: maximize preview"}, lines...)
 		for _, a := range m.actions() {
 			if a.enabled {
 				key := a.key
@@ -456,7 +505,20 @@ func (m *model) dialogView(width, height int) []string {
 	case "confirm":
 		op := d.confirm
 		title = "Review · " + op.label
-		if op.reset {
+		if op.snapshot != nil {
+			target := op.entry.Target
+			if op.direction == "current-to-source" {
+				target = op.entry.Source
+			}
+			lines = append(lines, wrap("Write: "+singleLine(target), max(1, width-4))...)
+			lines = append(lines, "Only this text hunk will be copied; scripts are not run.", "Patch orientation: Current (-) → Source (+)")
+			for _, h := range op.snapshot.Hunks {
+				if h.ID == op.hunkID {
+					lines = append(lines, wrap(sanitize(h.Patch), max(1, width-4))...)
+					break
+				}
+			}
+		} else if op.reset {
 			lines = append(lines, wrap("Script: "+singleLine(op.entry.Source), max(1, width-4))...)
 			lines = append(lines, "Remove only these persistent-state records:")
 			for _, r := range op.records {
@@ -482,7 +544,57 @@ func (m *model) dialogView(width, height int) []string {
 		top := min(d.selected, max(0, len(lines)-max(1, height-2)))
 		lines = lines[top:]
 	}
-	return m.pane(title, lines, width, height, true)
+	rows := m.pane(title, lines, width, height, true)
+	var buttons []string
+	for _, b := range m.dialogButtons() {
+		buttons = append(buttons, "["+b.label+"]")
+	}
+	if originalHeight > 1 {
+		rows = append(rows, fit(strings.Join(buttons, "  "), width))
+	}
+	return rows
+}
+
+func (m *model) searchDetailPane(width, height int) []string {
+	s := &m.search
+	var lines []string
+	match := m.selectedMatch()
+	if match == nil {
+		lines = []string{"s: type a keyword to search file contents", "Source searches the repository; Current searches managed live files."}
+	} else {
+		lines = append(lines, fmt.Sprintf("%s:%d:%d", singleLine(match.Path), match.Line, match.Column), "Scope: "+match.Scope+" · e: edit source")
+		if match.Entry == nil {
+			lines = append(lines, "Repository helper · no apply action")
+		}
+		if s.previewLoading {
+			lines = append(lines, "Loading preview…")
+		}
+		if s.previewErr != "" {
+			lines = append(lines, errorText(s.previewErr))
+		}
+		if s.previewWarning != "" {
+			lines = append(lines, s.previewWarning)
+		}
+		body := strings.Split(s.preview, "\n")
+		top := min(s.scroll, max(0, len(body)-1))
+		for i := top; i < len(body); i++ {
+			marker := " "
+			if i+1 == match.Line {
+				marker = ">"
+			}
+			line := fmt.Sprintf("%s%4d %s", marker, i+1, body[i])
+			if i+1 == match.Line {
+				line = m.paint(line, "3")
+			}
+			lines = append(lines, line)
+		}
+	}
+	if len(s.result.Errors) > 0 {
+		for _, err := range s.result.Errors {
+			lines = append(lines, errorText(err))
+		}
+	}
+	return m.pane("Search preview", lines, width, height, m.detail)
 }
 
 func wrap(s string, width int) []string {
