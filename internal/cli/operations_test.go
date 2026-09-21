@@ -123,7 +123,7 @@ func TestCLIIsolatedFileWorkflow(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &entries); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || !entries[0].Template || entries[0].Target != filepath.Join(destination, ".demo.toml") {
+	if len(entries) != 1 || !entries[0].Template || filepath.Clean(filepath.FromSlash(entries[0].Target)) != filepath.Join(destination, ".demo.toml") {
 		t.Fatalf("bad files JSON: %s", out)
 	}
 	out, err = call("preview", ".demo.toml", "--view", "rendered")

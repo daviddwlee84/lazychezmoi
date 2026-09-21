@@ -90,6 +90,15 @@ type routingGuard struct {
 	dirs  map[string]os.FileInfo
 }
 
+func freezeFileIdentity(info os.FileInfo) error {
+	// On Windows, Lstat defers the file ID lookup until SameFile is called.
+	// Resolve it while capturing the snapshot, before a path can be replaced.
+	if !os.SameFile(info, info) {
+		return errors.New("cannot capture source-context file identity")
+	}
+	return nil
+}
+
 func readControl(path string) (controlStamp, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -100,6 +109,9 @@ func readControl(path string) (controlStamp, error) {
 	}
 	if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
 		return controlStamp{}, errors.New("unsupported source-control file type")
+	}
+	if err := freezeFileIdentity(info); err != nil {
+		return controlStamp{}, err
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -166,6 +178,9 @@ func (g *routingGuard) refresh() (*routingGuard, error) {
 		}
 		if !info.IsDir() {
 			return nil, errors.New("source/current parent path is not a plain directory")
+		}
+		if err := freezeFileIdentity(info); err != nil {
+			return nil, err
 		}
 		fresh.dirs[path] = info
 	}

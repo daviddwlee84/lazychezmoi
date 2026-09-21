@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep Fish 3.x shell reload syntax compatible and capture Windows source-context
+  file identities before a path can be replaced.
+- Verify release archives and stage complete, checksum-checked binary releases
+  for macOS and Linux; use fixed upstream assets for the CI chezmoi fixture.
+
 - Add automatic Delta diff rendering with built-in fallback, width-aware layouts,
   and explicit Current/Source/Rendered labels.
 - Add reviewed, snapshot-checked bidirectional hunk copies and session Undo,

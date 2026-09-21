@@ -180,7 +180,8 @@ function lazychezmoi
         case '.'
             return 0
         case 'reload-v1.'
-            exec (status fish-path) -l
+            set -l __lc_fish (status fish-path)
+            exec "$__lc_fish" -l
         case '*'
             printf 'lazychezmoi: invalid shell reload response; shell unchanged\n' >&2
             return 1
