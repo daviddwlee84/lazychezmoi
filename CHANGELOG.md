@@ -4,8 +4,8 @@
 
 - Keep Fish 3.x shell reload streams and syntax compatible, and capture Windows
   source-context file identities before a path can be replaced.
-- Preserve Windows replacement metadata while accepting only the observed DACL
-  auto-inheritance bookkeeping difference; retain raw snapshot change detection.
+- Restore the inspected Windows DACL after file replacement merges inherited
+  entries, retaining full ACL comparisons and raw snapshot change detection.
 - Verify release archives and stage complete, checksum-checked binary releases
   for macOS and Linux; use fixed upstream assets for the CI chezmoi fixture.
 

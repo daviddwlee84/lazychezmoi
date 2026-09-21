@@ -132,9 +132,89 @@ func TestWindowsReplacementPreservesMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	logComparison("committed", after)
+	t.Logf("contract: data_equal=%t security_equivalent=%t metadata_equivalent=%t mode_equal=%t",
+		string(after.data) == "after\n", equivalentSecurity(before.metadata.security, after.metadata.security),
+		equivalentMetadata(before.metadata, after.metadata), before.info.Mode().Perm() == after.info.Mode().Perm())
 	if string(after.data) != "after\n" || !equivalentMetadata(before.metadata, after.metadata) || before.info.Mode().Perm() != after.info.Mode().Perm() {
 		t.Fatal("replacement did not preserve the content/metadata contract")
 	}
+}
+
+func TestWindowsWriteHunkFilePreservesInheritedAndProtectedSecurity(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("protected=%t", protected), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "original.txt")
+			if err := os.WriteFile(path, []byte("before\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if protected {
+				sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, copySecurity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dacl, _, err := sd.DACL()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+					windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+					nil, nil, dacl, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := context.Background()
+			before, err := captureFile(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := &Service{}
+			_, copyErr := s.writeHunkFile(ctx, before, []byte("after\n"), func() error {
+				return verifySnapshot(ctx, before)
+			})
+			after, err := captureFile(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("writeHunkFile contract: data_equal=%t security_equivalent=%t metadata_equivalent=%t mode_equal=%t",
+				string(after.data) == "after\n", equivalentSecurity(before.metadata.security, after.metadata.security),
+				equivalentMetadata(before.metadata, after.metadata), before.info.Mode().Perm() == after.info.Mode().Perm())
+			if copyErr != nil {
+				t.Fatal(copyErr)
+			}
+			if string(after.data) != "after\n" || !equivalentMetadata(before.metadata, after.metadata) || before.info.Mode().Perm() != after.info.Mode().Perm() {
+				t.Fatal("copy did not preserve the inspected content/metadata contract")
+			}
+		})
+	}
+}
+
+func TestWindowsReplacementSecurityFailurePreservesRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "original.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	before, err := captureFile(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := setReplacementSecurity
+	t.Cleanup(func() { setReplacementSecurity = original })
+	setReplacementSecurity = func(windows.Handle, windows.SE_OBJECT_TYPE, windows.SECURITY_INFORMATION, *windows.SID, *windows.SID, *windows.ACL, *windows.ACL) error {
+		return windows.ERROR_ACCESS_DENIED
+	}
+	s := &Service{}
+	_, err = s.writeHunkFile(ctx, before, []byte("after\n"), func() error { return verifySnapshot(ctx, before) })
+	var partial *replacementFailure
+	if !errors.As(err, &partial) || !partial.keepTemp || !strings.Contains(err.Error(), "replacement completed but ACL restoration failed") {
+		t.Fatalf("missing partial completion outcome: %v", err)
+	}
+	requireContent(t, path, "after\n")
+	backups, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".lazychezmoi-rollback-*"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("original rollback not preserved: count=%d error=%v", len(backups), err)
+	}
+	requireContent(t, backups[0], "before\n")
 }
 
 type securityShape struct {

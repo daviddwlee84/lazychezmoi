@@ -171,6 +171,8 @@ var callReplaceFile = func(destination, replacement, backup *uint16) (bool, erro
 	return ok != 0, err
 }
 
+var setReplacementSecurity = windows.SetSecurityInfo
+
 func commitReplacement(temp string, original *fileSnapshot) error {
 	destination, err := windows.UTF16PtrFromString(original.path)
 	if err != nil {
@@ -179,6 +181,25 @@ func commitReplacement(temp string, original *fileSnapshot) error {
 	replacement, err := windows.UTF16PtrFromString(temp)
 	if err != nil {
 		return err
+	}
+	// Keep a handle to the prepared file across the rename. ReplaceFileW merges
+	// DACLs and can turn inherited ACEs into explicit entries while appending
+	// inherited copies. Reapply the inspected DACL to this exact file afterward,
+	// never to a path that another writer may have replaced in the meantime.
+	// https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-replacefilew
+	handle, err := windows.CreateFile(replacement, windows.READ_CONTROL|windows.WRITE_DAC,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return fmt.Errorf("cannot preserve replacement ACL; no copy performed: %w", err)
+	}
+	defer windows.CloseHandle(handle)
+	preparedSecurity, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, copySecurity)
+	if err != nil {
+		return err
+	}
+	if !equivalentSecurity(original.metadata.security, preparedSecurity.String()) {
+		return errors.New("prepared file security differs; no copy performed")
 	}
 	rollback, err := os.CreateTemp(filepath.Dir(original.path), ".lazychezmoi-rollback-*")
 	if err != nil {
@@ -204,6 +225,10 @@ func commitReplacement(temp string, original *fileSnapshot) error {
 	// memory-only. No IGNORE_ACL/MERGE flags permit metadata loss.
 	ok, callErr := callReplaceFile(destination, replacement, backup)
 	if ok {
+		if err := restoreReplacementDACL(handle, original.metadata.security); err != nil {
+			keepRollback = true
+			return &replacementFailure{message: fmt.Sprintf("Windows replacement completed but ACL restoration failed; do not retry. Recovery paths: destination %q, original rollback %q", original.path, rollbackName), cause: err, keepTemp: true}
+		}
 		return nil
 	}
 	// ReplaceFile documents partial failure states. Inspect the actual paths
@@ -228,6 +253,38 @@ func commitReplacement(temp string, original *fileSnapshot) error {
 	}
 	keepRollback = true
 	return &replacementFailure{message: fmt.Sprintf("Windows replacement had a partial or unknown outcome; do not retry. Recovery paths: destination %q, original rollback %q, replacement %q (some may be absent)", original.path, rollbackName, temp), cause: callErr, keepTemp: true}
+}
+
+func restoreReplacementDACL(handle windows.Handle, security string) error {
+	sd, err := windows.SecurityDescriptorFromString(security)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		return err
+	}
+	flags := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
+	if control&windows.SE_DACL_PROTECTED != 0 {
+		flags |= windows.PROTECTED_DACL_SECURITY_INFORMATION
+	} else {
+		flags |= windows.UNPROTECTED_DACL_SECURITY_INFORMATION
+	}
+	if err := setReplacementSecurity(handle, windows.SE_FILE_OBJECT, flags, nil, nil, dacl, nil); err != nil {
+		return err
+	}
+	actual, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, copySecurity)
+	if err != nil {
+		return err
+	}
+	if !equivalentSecurity(security, actual.String()) {
+		return errors.New("replacement security did not preserve the inspected owner, group, and complete DACL")
+	}
+	return nil
 }
 
 func restoreMissingWindowsFile(original *fileSnapshot) (err error) {

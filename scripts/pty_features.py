@@ -19,6 +19,7 @@ class FeatureTerminal(Terminal):
     def __init__(self, argv, env):
         self.screen = pyte.Screen(100, 24)
         self.stream = pyte.Stream(self.screen)
+        self.last_output = time.monotonic()
         super().__init__(argv, env)
 
     def drain(self):
@@ -27,6 +28,7 @@ class FeatureTerminal(Terminal):
                 data = self.chunks.get_nowait()
                 self.output += data
                 self.stream.feed(data)
+                self.last_output = time.monotonic()
             except queue.Empty:
                 return
 
@@ -55,10 +57,21 @@ class FeatureTerminal(Terminal):
         self.send(f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m")
 
     def ready_hunks(self, header):
-        self.visible(header)
-        self.wait(lambda: "Loading preview" not in "\n".join(self.screen.display)
-                  and "BUSY" not in "\n".join(self.screen.display)
-                  and "stale" not in "\n".join(self.screen.display), "hunk snapshot ready")
+        def ready():
+            screen = "\n".join(self.screen.display)
+            # A PTY read can stop between the new header and the loading/body
+            # updates of one frame. Wait for the selected fixture's actual
+            # rendered diff and a quiet screen before sending a guarded action.
+            contents = {
+                "Hunk 1/2": ("-answer = 1", "+answer = 2"),
+                "Hunk 2/2": ("-tail = 1", "+tail = 2"),
+            }
+            rendered = any(label in screen and all(line in screen for line in lines)
+                           for label, lines in contents.items())
+            return (header in screen and rendered
+                    and not any(marker in screen for marker in ("Loading preview", "BUSY", "stale"))
+                    and time.monotonic() - self.last_output >= 0.1)
+        self.wait(ready, f"rendered and settled {header}")
 
 
 def main():
