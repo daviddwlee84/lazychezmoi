@@ -120,11 +120,13 @@ def main():
             terminal.click(4, 3)  # A modal must consume clicks on background tabs.
             assert current_file.read_text() == current_text, "copy ran without confirmation"
             terminal.click_text("[Confirm]")
-            terminal.wait(lambda: current_file.read_text() == "answer = 1\n" + shared + "tail = 2\n", "only the selected hunk was copied")
-            terminal.visible("complete")
+            # Observe completion before opening receiving files: polling them
+            # during ReplaceFileW can collide with Windows sharing semantics.
+            terminal.visible("Copy hunk Source → Current complete")
+            assert current_file.read_text() == "answer = 1\n" + shared + "tail = 2\n", "only the selected hunk was copied"
             terminal.send("U")
-            terminal.wait(lambda: current_file.read_text() == current_text, "undo restored current bytes")
             terminal.visible("Undo hunk copy complete")
+            assert current_file.read_text() == current_text, "undo restored current bytes"
             terminal.ready_hunks("Hunk ")
             # Wait for a different selection before navigating back. Sending
             # N while already on hunk 1 lets the old header satisfy the wait
@@ -137,11 +139,11 @@ def main():
             terminal.send(">")
             terminal.visible("Review")
             terminal.send("\r")
-            terminal.wait(lambda: source_file.read_text() == "answer = 1\n" + shared + "tail = 2\n", "current-to-source copied the selected hunk")
-            terminal.visible("complete")
+            terminal.visible("Copy hunk Current → Source complete")
+            assert source_file.read_text() == "answer = 1\n" + shared + "tail = 2\n", "current-to-source copied the selected hunk"
             terminal.send("U")
-            terminal.wait(lambda: source_file.read_text() == source_text, "undo restored source bytes")
             terminal.visible("Undo hunk copy complete")
+            assert source_file.read_text() == source_text, "undo restored source bytes"
 
             terminal.send("shelperneedle")
             terminal.visible("helper.tmpl")  # Debounce must complete before Enter.

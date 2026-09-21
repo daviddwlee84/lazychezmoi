@@ -197,8 +197,8 @@ def main():
             terminal.wait(lambda: "= 2" in src.read_text(), "editor changed source")
             terminal.contains("Edit source complete")
             terminal.send("a")
-            terminal.wait(lambda: "= 2" in target.read_text(), "selected target applied")
             terminal.contains("Apply selected files complete")
+            assert "= 2" in target.read_text(), "selected target applied"
             terminal.send("?")
             time.sleep(0.1)
             terminal.send("\x1b")
