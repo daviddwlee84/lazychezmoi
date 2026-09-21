@@ -113,6 +113,12 @@ def main():
             terminal.wait(lambda: current_file.read_text() == current_text, "undo restored current bytes")
             terminal.visible("Undo hunk copy complete")
             terminal.ready_hunks("Hunk ")
+            # Wait for a different selection before navigating back. Sending
+            # N while already on hunk 1 lets the old header satisfy the wait
+            # before the new asynchronous render is ready for a review.
+            if "Hunk 1/2" in "\n".join(terminal.screen.display):
+                terminal.send("n")
+            terminal.ready_hunks("Hunk 2/2")
             terminal.send("N")
             terminal.ready_hunks("Hunk 1/2")
             terminal.send(">")

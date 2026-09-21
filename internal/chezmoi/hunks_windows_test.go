@@ -4,12 +4,15 @@ package chezmoi
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -103,6 +106,13 @@ func TestWindowsReplacementPreservesMetadata(t *testing.T) {
 			before.metadata.creation == current.metadata.creation,
 			current.metadata.creation-before.metadata.creation,
 			before.info.Mode().Perm(), current.info.Mode().Perm())
+		originalSecurity := windowsSecurityShape(t, before.metadata.security)
+		currentSecurity := windowsSecurityShape(t, current.metadata.security)
+		t.Logf("%s components: owner_equal=%t group_equal=%t dacl_equal=%t before_aces=%v after_aces=%v",
+			label, originalSecurity.owner == currentSecurity.owner,
+			originalSecurity.group == currentSecurity.group,
+			fmt.Sprint(originalSecurity.aces) == fmt.Sprint(currentSecurity.aces),
+			originalSecurity.aces, currentSecurity.aces)
 	}
 	temp, err := prepareReplacement(ctx, before, []byte("after\n"))
 	if err != nil {
@@ -125,6 +135,55 @@ func TestWindowsReplacementPreservesMetadata(t *testing.T) {
 	if string(after.data) != "after\n" || !equivalentMetadata(before.metadata, after.metadata) || before.info.Mode().Perm() != after.info.Mode().Perm() {
 		t.Fatal("replacement did not preserve the content/metadata contract")
 	}
+}
+
+type securityShape struct {
+	owner, group [32]byte
+	aces         []string
+}
+
+func windowsSecurityShape(t *testing.T, value string) securityShape {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, _, err := sd.Group()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape := securityShape{owner: sha256.Sum256([]byte(owner.String())), group: sha256.Sum256([]byte(group.String()))}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dacl == nil {
+		shape.aces = []string{"null-dacl"}
+		return shape
+	}
+	for i := uint16(0); i < dacl.AceCount; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
+			t.Fatal(err)
+		}
+		if ace.Header.AceSize < 8 {
+			t.Fatal("unexpected short ACE")
+		}
+		body := unsafe.Slice((*byte)(unsafe.Pointer(ace)), int(ace.Header.AceSize))
+		hash := sha256.Sum256(body)
+		sidHash := "not-simple-ace"
+		if ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
+			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+			sum := sha256.Sum256([]byte(sid.String()))
+			sidHash = fmt.Sprintf("%x", sum[:8])
+		}
+		shape.aces = append(shape.aces, fmt.Sprintf("type=%d,flags=%#x,mask=%#x,size=%d,sid_hash=%s,ace_hash=%x", ace.Header.AceType, ace.Header.AceFlags, ace.Mask, ace.Header.AceSize, sidHash, hash[:8]))
+	}
+	return shape
 }
 
 func TestWindowsSecurityEquivalenceOnlyIgnoresAutoInheritedControl(t *testing.T) {
