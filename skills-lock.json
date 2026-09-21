@@ -4,8 +4,8 @@
     "go-cli-tui": {
       "source": "daviddwlee84/agent-skills",
       "sourceType": "github",
-      "skillPath": "skills/local/go-cli-tui/SKILL.md",
-      "computedHash": "fdf046589e19859397d800a1855cfc33a74d9ce3fa43e4ea3a00a5d14a05ef35"
+      "skillPath": "skills/owned/go-cli-tui/SKILL.md",
+      "computedHash": "a67197d3b48072d649d0966851d72df4113806cea2ae3ed9dc1e86857d72927f"
     }
   }
 }

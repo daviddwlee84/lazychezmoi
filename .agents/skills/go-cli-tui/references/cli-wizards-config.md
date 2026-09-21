@@ -79,6 +79,12 @@ writers, services, and cancellation without launching a real terminal.
 - A child cannot change its parent shell's cwd. If navigation requires a shell
   wrapper, use a narrow structured handoff, not `eval` of general command output.
 
+Authentication-required is not a missing wizard field. For SSH, keep background
+checks noninteractive and let an explicit human action hand the terminal to
+native SSH; machine output returns a structured requirement. Preserve the draft
+across cancellation. See [SSH authentication handoffs](async-terminal.md#ssh-authentication-handoffs)
+for terminal restoration, session lifetime and shared-master ownership.
+
 ## Wizard experience
 
 Use guided choice to remove syntax memorization, not to ask every possible flag.
@@ -122,6 +128,11 @@ results. Send the raw Ctrl+S byte (`\x13`) through a real PTY; on POSIX terminal
 check that IXON flow control is disabled while the TUI owns input and restored
 on exit. A model-level key test alone cannot detect Ctrl+S freezing terminal
 output before the application receives it.
+
+Guard search and mouse submission too. An empty filtered selection must not submit
+an older hidden choice. Clipped/offscreen buttons are not clickable; derive hits
+from visible geometry and invalidate presses after resize/layout changes. Start a
+destructive review on Cancel, and test Enter before changing that selection.
 
 Before apply, revalidate the current target when concurrent changes could make
 the review obsolete. Report partial effects separately from remaining work.
