@@ -230,3 +230,19 @@ chezmoi 整合測試使用獨立 source、config、destination、cache 和 state
 CI 包含 macOS／Linux／Windows 的 vet、race tests、build 和真實 PTY／ConPTY editor→apply、mouse、hunk→Undo、live grep 驗收。Windows 的 Python harness 需要 `pywinpty`；feature harness 使用 `pyte` 檢查 ASCII 介面控制，Unicode 寬度另有 Go 測試。CI 準備 rg／delta，使相關測試實際執行。本機跨編譯只能證明編譯成功，不能代替原生 Windows 終端驗收。
 
 程式分成 `internal/chezmoi`（共享操作／hunk snapshots）、`internal/diffview`（delta／內建 renderer）、`internal/search`（rg／結果預覽）、`internal/tui`（模型／action registry／共用 layout）、`internal/cli`（命令介面）、`internal/config` 與 `internal/shell`。介面建立不執行 I/O；非同步結果依 request generation 接受，寫入結束後重新取得狀態。
+
+### Source distribution size
+
+Release assets include a rootless source archive (`lazychezmoi_<version>_source.tar.gz`)
+and its checksum. Source archives omit SpecStory history and agent plan folders
+using `.gitattributes`; Go module downloads omit the same evidence through nested
+`go.mod` boundary markers. Build inputs, embedded resources, tests, licenses, and
+skills remain available. Full Git clones retain development history.
+
+CI builds and exercises both a real Git archive and an independently generated Go
+module ZIP using the official `golang.org/x/mod` implementation. To run the check
+from a committed revision:
+
+```sh
+python3 scripts/check-distribution.py
+```

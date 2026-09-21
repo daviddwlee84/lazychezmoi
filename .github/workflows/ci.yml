@@ -84,6 +84,10 @@ jobs:
         run: python3 -m unittest discover -s scripts -p "test_*release*.py"
       - name: Test fixed upstream fixture verification
         run: python3 -m unittest discover -s scripts -p "test_install_fixture_chezmoi.py"
+      - name: Test independent distribution boundaries
+        run: python3 -m unittest discover -s scripts -p test_distribution.py
+      - name: Build real source archive and Go module ZIP
+        run: python3 scripts/check-distribution.py
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: v2.18.2
