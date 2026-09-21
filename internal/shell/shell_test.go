@@ -57,12 +57,16 @@ func shellChild() int {
 		if args[0] == "request-fail" {
 			return 23
 		}
-	case "invalid":
+	case "invalid", "invalid-nul":
 		f, err := openChannel()
 		if err != nil {
 			return 3
 		}
-		_, _ = io.WriteString(f, args[1])
+		response := token + ".\x00"
+		if args[0] == "invalid" {
+			response = args[1]
+		}
+		_, _ = io.WriteString(f, response)
 		_ = f.Close()
 	case "fail":
 		return 23
@@ -174,6 +178,20 @@ func TestPOSIXWrappers(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &got); err != nil || !got.Available || fmt.Sprint(got.Args) != "[with space  literal;$(no)]" {
 				t.Fatalf("argument/channel round trip: %+v; %v; output %q", got, err, out)
 			}
+			if name == "fish" {
+				// Repeated calls and directory changes exercise Fish's internal
+				// descriptor allocation as well as the first invocation.
+				out, err = invoke("cd /; lazychezmoi inspect first; cd "+shellQuote(fixture.home)+"; lazychezmoi inspect second", "")
+				if err != nil {
+					t.Fatalf("repeated invocation: %v: %s", err, out)
+				}
+				decoder := json.NewDecoder(strings.NewReader(out))
+				for _, want := range []string{"first", "second"} {
+					if err := decoder.Decode(&got); err != nil || !got.Available || len(got.Args) != 1 || got.Args[0] != want {
+						t.Fatalf("repeated argument/channel round trip: %+v; %v; output %q", got, err, out)
+					}
+				}
+			}
 			out, err = invoke("lazychezmoi stdin", "original stdin\n")
 			if err != nil || out != "original stdin\n" {
 				t.Fatalf("stdin not preserved: %q; %v", out, err)
@@ -191,6 +209,11 @@ func TestPOSIXWrappers(t *testing.T) {
 				if !strings.Contains(out, "invalid shell reload response") {
 					t.Fatalf("invalid token not diagnosed: %q", out)
 				}
+			}
+			out, err = invoke("lazychezmoi invalid-nul", "")
+			assertExitCode(t, err, 1, out)
+			if !strings.Contains(out, "invalid shell reload response") || strings.Contains(out, "RELOADED") {
+				t.Fatalf("NUL-truncated token accepted: %q", out)
 			}
 
 			// The login profile exits immediately and reports its PID, proving
@@ -296,7 +319,7 @@ func TestPOSIXPTYReload(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 unavailable for PTY verification")
 	}
-	for _, name := range []string{"bash", "zsh"} {
+	for _, name := range []string{"bash", "zsh", "fish"} {
 		t.Run(name, func(t *testing.T) {
 			binary, err := exec.LookPath(name)
 			if err != nil {
@@ -326,12 +349,17 @@ binary, kind, wrapper = sys.argv[1:]
 pid, master = pty.fork()
 if pid == 0:
     flags = ['--noprofile', '--norc', '-i'] if kind == 'bash' else ['-f', '-i']
+    if kind == 'fish':
+        flags = ['--no-config', '-i']
     os.execv(binary, [binary] + flags)
 command = '. ' + shlex.quote(wrapper) + '\n' + 'printf "PARENT:%s\\n" "$$"; lazychezmoi tty-request\n'
+if kind == 'fish':
+    command = '. ' + shlex.quote(wrapper) + '\n' + 'printf "PARENT:%s\\n" $fish_pid; lazychezmoi tty-request\n'
 os.write(master, command.encode())
 output = bytearray()
 deadline = time.monotonic() + 15
 finished = False
+sent_exit = False
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.1)
     if ready:
@@ -346,6 +374,11 @@ while time.monotonic() < deadline:
             finished = True
             break
         output.extend(chunk)
+        # Fish resumes its interactive prompt after an exit in startup config.
+        # Once the profile proves the exec/PID handoff, close that prompt too.
+        if kind == 'fish' and not sent_exit and b'RELOADED:' in output:
+            os.write(master, b'exit\n')
+            sent_exit = True
 if not finished:
     os.kill(pid, signal.SIGKILL)
 _, status = os.waitpid(pid, 0)

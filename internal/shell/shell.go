@@ -152,27 +152,25 @@ function lazychezmoi {
 } 4>&1
 `
 
+// Fish 3 does not preserve block FD redirections inside command substitutions.
+// Its external-command FD pipeline leaves stdin/stdout attached to the caller.
+// A small POSIX envelope appends the sentinel to that private pipe; a second
+// read must reach EOF so a NUL cannot truncate a response into an accepted token.
 const fishInit = `# lazychezmoi shell integration: lazychezmoi shell-init fish | source
-function __lazychezmoi_invoke
-    set -lx LAZYCHEZMOI_RELOAD_KIND fish
-    set -lx LAZYCHEZMOI_RELOAD_FD 3
-    set -lx LAZYCHEZMOI_RELOAD_FILE ''
-    command @@EXE@@ $argv 3>&1 1>&4
-    set -l __lc_status $status
-    printf '.'
-    return $__lc_status
-end
 function lazychezmoi
-    set -l __lc_reply
-    set -l __lc_status
-    begin
-        set __lc_reply (__lazychezmoi_invoke $argv)
-        set __lc_status $status
-    end 4>&1
+    set -l __lc_reply ''
+    set -l __lc_extra ''
+    set -l __lc_extra_status
+    command /bin/sh -c 'LAZYCHEZMOI_RELOAD_KIND=fish LAZYCHEZMOI_RELOAD_FD=3 LAZYCHEZMOI_RELOAD_FILE= "$@"; __lc_status=$?; printf . >&3; exit "$__lc_status"' lazychezmoi @@EXE@@ $argv 3>| begin
+        read --null __lc_reply
+        read --null __lc_extra
+        set __lc_extra_status $status
+    end
+    set -l __lc_status $pipestatus[1]
     if test $__lc_status -ne 0
         return $__lc_status
     end
-    if test (count $__lc_reply) -ne 1
+    if test $__lc_extra_status -ne 1
         printf 'lazychezmoi: invalid shell reload response; shell unchanged\n' >&2
         return 1
     end

@@ -126,3 +126,42 @@ func TestWindowsReplacementPreservesMetadata(t *testing.T) {
 		t.Fatal("replacement did not preserve the content/metadata contract")
 	}
 }
+
+func TestWindowsSecurityEquivalenceOnlyIgnoresAutoInheritedControl(t *testing.T) {
+	const original = "O:SYG:BAD:(A;;FA;;;SY)(A;;FR;;;BA)"
+	const inherited = "O:SYG:BAD:AI(A;;FA;;;SY)(A;;FR;;;BA)"
+	if !equivalentSecurity(original, inherited) || !equivalentSecurity(inherited, original) {
+		t.Fatal("automatic-inheritance control bookkeeping changed effective equivalence")
+	}
+	for name, changed := range map[string]string{
+		"owner":      "O:BAG:BAD:AI(A;;FA;;;SY)(A;;FR;;;BA)",
+		"group":      "O:SYG:BUD:AI(A;;FA;;;SY)(A;;FR;;;BA)",
+		"permission": "O:SYG:BAD:AI(A;;FR;;;SY)(A;;FR;;;BA)",
+		"ACE order":  "O:SYG:BAD:AI(A;;FR;;;BA)(A;;FA;;;SY)",
+		"ACE flags":  "O:SYG:BAD:AI(A;ID;FA;;;SY)(A;;FR;;;BA)",
+		"protection": "O:SYG:BAD:PAI(A;;FA;;;SY)(A;;FR;;;BA)",
+		"request":    "O:SYG:BAD:ARAI(A;;FA;;;SY)(A;;FR;;;BA)",
+		"invalid":    "not a descriptor",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if equivalentSecurity(original, changed) {
+				t.Fatal("a distinct permission/identity/control was accepted")
+			}
+		})
+	}
+	a := fileMetadata{security: original, attributes: windows.FILE_ATTRIBUTE_ARCHIVE, creation: 123}
+	b := a
+	b.security = inherited
+	if !equivalentMetadata(a, b) || metadataFingerprint(a) == metadataFingerprint(b) {
+		t.Fatal("equivalence must normalize only the comparison, retaining raw snapshot detection")
+	}
+	b.creation++
+	if equivalentMetadata(a, b) {
+		t.Fatal("creation time change was ignored")
+	}
+	b.creation = a.creation
+	b.attributes |= windows.FILE_ATTRIBUTE_HIDDEN
+	if equivalentMetadata(a, b) {
+		t.Fatal("attribute change was ignored")
+	}
+}

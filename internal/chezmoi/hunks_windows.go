@@ -47,7 +47,37 @@ func metadataFingerprint(m fileMetadata) string {
 	return digest(m.identity, m.changed, m.security, fmt.Sprintf("%d/%d", m.attributes, m.creation))
 }
 func equivalentMetadata(a, b fileMetadata) bool {
-	return a.security == b.security && a.attributes == b.attributes && a.creation == b.creation
+	return equivalentSecurity(a.security, b.security) && a.attributes == b.attributes && a.creation == b.creation
+}
+
+func equivalentSecurity(a, b string) bool {
+	// SetNamedSecurityInfo may set SE_DACL_AUTO_INHERITED while preserving
+	// the owner's/group's SIDs and the complete DACL. That control bit records
+	// automatic-inheritance bookkeeping, not an access permission. Normalize
+	// only that observed bit; ACE flags/order and DACL protection still must
+	// match exactly. The raw descriptor remains in metadataFingerprint so a
+	// change to an inspected file still invalidates the snapshot.
+	// https://learn.microsoft.com/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow
+	normalize := func(value string) (string, error) {
+		sd, err := windows.SecurityDescriptorFromString(value)
+		if err != nil {
+			return "", err
+		}
+		if err := sd.SetControl(windows.SE_DACL_AUTO_INHERITED, 0); err != nil {
+			return "", err
+		}
+		canonical := sd.String()
+		if canonical == "" {
+			return "", errors.New("cannot serialize file security descriptor")
+		}
+		return canonical, nil
+	}
+	left, err := normalize(a)
+	if err != nil {
+		return false
+	}
+	right, err := normalize(b)
+	return err == nil && left == right
 }
 
 func prepareReplacement(ctx context.Context, original *fileSnapshot, data []byte) (name string, err error) {
