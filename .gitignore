@@ -43,3 +43,7 @@
 /lazychezmoi.exe
 *.test
 __pycache__/
+
+/dist/
+
+/completions/

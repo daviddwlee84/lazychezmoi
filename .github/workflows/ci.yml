@@ -1,7 +1,13 @@
 name: CI
 on:
   push:
+    branches: ["**"]
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +21,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
@@ -23,7 +31,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install fixture backend
-        run: go install github.com/twpayne/chezmoi/v2@v2.69.4
+        run: python scripts/install_fixture_chezmoi.py --directory "${{ runner.temp }}/chezmoi-fixture"
       - name: Install diff and search test tools (Linux/Windows)
         if: runner.os != 'macOS'
         run: python scripts/install_ci_tools.py
@@ -56,3 +64,31 @@ jobs:
       - name: Mouse, hunk and search acceptance (Windows)
         if: runner.os == 'Windows'
         run: python scripts/pty_features.py build/lazychezmoi.exe
+
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test release verification and immutable publication
+        run: python3 -m unittest discover -s scripts -p "test_*release*.py"
+      - name: Test fixed upstream fixture verification
+        run: python3 -m unittest discover -s scripts -p "test_install_fixture_chezmoi.py"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.2
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean
+      - name: Verify four platform archives and native startup
+        run: python3 scripts/release.py check --project lazychezmoi --binary lazychezmoi --smoke

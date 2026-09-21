@@ -17,7 +17,7 @@ go install .
 lazychezmoi
 ```
 
-Windows 使用 `build/lazychezmoi.exe`。目前沒有宣告已發布的版本或套件管理器安裝渠道。
+Windows 使用 `build/lazychezmoi.exe`。GitHub tagged releases 提供 macOS／Linux amd64／arm64 的 binary archives、`checksums.txt` 與 Bash／Zsh completions；Windows 仍從 source 建置。發行與驗證方式見 [RELEASING.md](RELEASING.md)。
 
 預設採用 chezmoi 的 source／destination，**不會因目前工作目錄而換成另一份 checkout**。操作其他來源時明確指定：
 
