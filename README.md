@@ -19,6 +19,8 @@ lazychezmoi
 
 Windows 使用 `build/lazychezmoi.exe`。GitHub tagged releases 提供 macOS／Linux amd64／arm64 的 binary archives、`checksums.txt` 與 Bash／Zsh completions；Windows 仍從 source 建置。發行與驗證方式見 [RELEASING.md](RELEASING.md)。
 
+Homebrew 安裝可用 `lazychezmoi upgrade`：先確認目前執行檔所屬的 formula，顯示並確認後委派給 `brew upgrade`。`lazychezmoi upgrade --check --json` 只檢查安裝來源與預定指令；非互動或 JSON 模式需要 `--yes` 才會更新。其他安裝來源會提供對應指引，不會直接覆寫執行檔。這個命令不需要 chezmoi、Git 或有效設定，也不會更新 dotfiles；既有的 `lazychezmoi update` 仍是 chezmoi 的拉取／套用操作。
+
 預設採用 chezmoi 的 source／destination，**不會因目前工作目錄而換成另一份 checkout**。操作其他來源時明確指定：
 
 ```sh

@@ -154,6 +154,7 @@ func New(version string) *cobra.Command {
 		return runOperation(cmd, service, chezmoi.Operation{Kind: "externals"})
 	}})
 	root.AddCommand(externals, a.configCommand(), shellCommand(), completionCommand(root))
+	root.AddCommand(newUpgradeCommand(upgradeOptions{isTerminal: interactive}))
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print build version", Args: args(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), version)
 		return err

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.2 — 2026-09-23
+
+- Add `upgrade --check` and reviewed `upgrade --yes` for the lazychezmoi
+  executable's verified Homebrew formula, with clean JSON and post-upgrade
+  version verification. This remains separate from chezmoi's existing `update`.
+
+## Previously recorded notes
+
+These notes were already present in the v0.1.1 source. They are retained without
+retrospectively assigning a first-release version to each feature.
+
 - Keep Fish 3.x shell reload streams and syntax compatible, and capture Windows
   source-context file identities before a path can be replaced.
 - Restore the inspected Windows DACL after file replacement merges inherited
