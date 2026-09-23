@@ -4,6 +4,36 @@
 
 支援 macOS、Linux 與原生 Windows／PowerShell。這是本機工作台；使用已安裝的 **chezmoi** 作為操作引擎，Git commit 交給 **lazygit**。Fleet 整合與個人 dotfiles 工具移植不包含在第一版。
 
+## Windows installation and upgrades
+
+```powershell
+scoop bucket add daviddwlee84 https://github.com/daviddwlee84/scoop-bucket
+scoop install daviddwlee84/lazychezmoi
+lazychezmoi upgrade --check --json
+lazychezmoi upgrade --yes
+```
+
+Windows v0.2.0+ releases include amd64/arm64 ZIPs and PowerShell completion.
+Scoop owns the installed executable. Upgrade verifies its receipt, current
+junction, product identity and manager, then starts a private helper outside the
+package and exits so Scoop can replace the executable. Interactive use opens a
+progress window. A `handed-off` result confirms acceptance; only the later
+`updated` or `up-to-date` result confirms successful completion.
+
+For automation, add `--json` and run the returned `status_command` to poll the
+private helper. Do not poll the installed executable during the update, because
+Scoop refuses to update a running package. Once finished,
+`lazychezmoi upgrade --status <operation-id> --json` reads the saved result.
+If the launching host retains process lifetime control, keep that terminal open
+until the final result. Interrupted, canceled, blocked and failed operations
+retain their status and log paths; none claims successful rollback or falls
+back to another installer. Close other instances before retrying.
+
+`--check` is read-only and does not refresh buckets or promise a remote latest
+version. Successful completion reports the version actually installed. Manually
+extracted Windows ZIPs need manual replacement while closed; package ownership and Windows process guards cannot be overridden. Installing the CLI does not
+configure its backends, services or credentials.
+
 ## 建置與啟動
 
 需要 Go **1.25+**、Git 和 chezmoi。精細腳本紀錄重設目前驗證於 chezmoi **2.69.4**；其他版本仍可使用一般原生操作，但不開放未驗證的 state 修改。lazygit 僅在使用該 action 時需要。Windows shell reload 建議 PowerShell **7.4+**。
@@ -17,7 +47,7 @@ go install .
 lazychezmoi
 ```
 
-Windows 使用 `build/lazychezmoi.exe`。GitHub tagged releases 提供 macOS／Linux amd64／arm64 的 binary archives、`checksums.txt` 與 Bash／Zsh completions；Windows 仍從 source 建置。發行與驗證方式見 [RELEASING.md](RELEASING.md)。
+Windows 使用 `build/lazychezmoi.exe`。GitHub tagged releases 提供 macOS／Linux amd64／arm64 的 tar.gz 與 Windows amd64／arm64 的 ZIP，附 `checksums.txt` 與 Bash／Zsh／PowerShell completions。發行與驗證方式見 [RELEASING.md](RELEASING.md)。
 
 Homebrew 安裝可用 `lazychezmoi upgrade`：先確認目前執行檔所屬的 formula，顯示並確認後委派給 `brew upgrade`。`lazychezmoi upgrade --check --json` 只檢查安裝來源與預定指令；非互動或 JSON 模式需要 `--yes` 才會更新。其他安裝來源會提供對應指引，不會直接覆寫執行檔。這個命令不需要 chezmoi、Git 或有效設定，也不會更新 dotfiles；既有的 `lazychezmoi update` 仍是 chezmoi 的拉取／套用操作。
 
