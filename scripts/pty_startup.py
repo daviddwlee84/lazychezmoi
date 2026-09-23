@@ -168,7 +168,7 @@ class StartupTerminal(Terminal):
             time.sleep(0.01)
         self.drain()
         # Do not include terminal/config/source bodies in benchmark output.
-        raise AssertionError("Timed out: " + label + "; fixture_rows=" + repr(re.findall(r"STARTUP_[A-Z]+_LINE_\d+", self.visible_text())) + "; loading=" + str("Loading preview" in self.visible_text()) + "; stale=" + str("Stale snapshot; refresh pending" in self.visible_text()))
+        raise AssertionError("Timed out: " + label + "; fixture_rows=" + repr(re.findall(r"STARTUP_[A-Z]+_LINE_\d+", self.visible_text())) + "; pane_titles=" + repr([row.strip() for row in self.screen.display if "┌" in row]) + "; loading=" + str("Loading preview" in self.visible_text()) + "; stale=" + str("Stale snapshot; refresh pending" in self.visible_text()))
 
     def settled_markers(self, pattern, first=None, timeout=2):
         previous, changed = [], time.monotonic()
@@ -377,7 +377,7 @@ def main():
                 # ConPTY may group a multi-character write into one text event.
                 # Exercise separate navigation keys as an interactive user would.
                 terminal.send("l")
-                terminal.drain()
+                terminal.wait(lambda: "> Preview" in terminal.visible_text(), "focused preview pane")
                 terminal.send("j")
                 terminal.settled_markers(r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_01")
                 terminal.send("j")
