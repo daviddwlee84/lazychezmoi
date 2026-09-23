@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
             assert initial['status']=='handed-off',initial
             deadline=time.monotonic()+120
             while time.monotonic()<deadline:
-                state=decode(run([str(exe),'upgrade','--status',initial['operation_id'],'--json'],env=env))
+                state=decode(run(initial['status_command'],env=env))
                 if state['status'] in ['updated','up-to-date','blocked','failed','canceled','interrupted']:
                     if state['status']!=expected:
                         log=Path(state['log_path'])

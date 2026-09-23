@@ -61,6 +61,7 @@ type Report struct {
 	Command        []string `json:"command,omitempty"`
 	CanUpgrade     bool     `json:"can_upgrade"`
 	Changed        bool     `json:"changed"`
+	StatusCommand  []string `json:"status_command,omitempty"`
 	OperationID    string   `json:"operation_id,omitempty"`
 	ResultPath     string   `json:"result_path,omitempty"`
 	LogPath        string   `json:"log_path,omitempty"`

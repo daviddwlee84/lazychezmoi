@@ -145,7 +145,7 @@ func WriteHuman(out io.Writer, r Report) error {
 	}
 	if r.OperationID != "" {
 		fmt.Fprintln(out, "Operation:", r.OperationID)
-		fmt.Fprintln(out, "Inspect with: upgrade --status", r.OperationID)
+		fmt.Fprintln(out, "Inspect without starting the package being updated:", displayCommand(r.StatusCommand))
 	}
 	if r.Version != "" {
 		fmt.Fprintln(out, "Installed version:", r.Version)

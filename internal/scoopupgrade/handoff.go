@@ -239,7 +239,8 @@ func runHelper(r request, dir string) int {
 	result := Report{Status: "waiting", Manager: "scoop", Package: r.Package, Bucket: r.Bucket, CurrentVersion: r.Version,
 		Path: r.StablePath, Command: r.command(), CanUpgrade: true, OperationID: r.OperationID,
 		ResultPath: filepath.Join(dir, "result.json"), LogPath: filepath.Join(dir, "progress.log"),
-		HelperPID: os.Getpid(), HelperStarted: processStarted(os.Getpid())}
+		HelperPID: os.Getpid(), HelperStarted: processStarted(os.Getpid()),
+		StatusCommand: []string{filepath.Join(dir, "helper.exe"), "upgrade", "--status", r.OperationID, "--json"}}
 	if result.HelperStarted == 0 || r.ParentPID <= 0 || r.ParentStarted == 0 {
 		return 1
 	}
@@ -308,6 +309,7 @@ func runHelper(r request, dir string) int {
 	}
 	args := r.command()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.Dir = dir
 	cmd.Env = replaceEnv(os.Environ(), "SCOOP", r.Root)
 	cmd.Stdout, cmd.Stderr = output, output
 	cmd.WaitDelay = 2 * time.Second
