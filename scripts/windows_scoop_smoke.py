@@ -89,6 +89,7 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
                     if state['status']!=expected:
                         log=Path(state['log_path'])
                         raise AssertionError((expected,state,log.read_text(errors='replace') if log.exists() else 'no log'))
+                    assert state['change_known'] == (expected in ('updated','up-to-date')),state
                     records.append({'case':expected,'operation_id':initial['operation_id'],'status':state['status'],'version':state.get('version')})
                     return state
                 time.sleep(.2)
@@ -96,6 +97,12 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         set_manifest('v0.0.2')
         state=apply('updated');assert state['version']=='v0.0.2',state
         assert 'v0.0.2' in run([str(exe),'--version'],env=env)
+        operation=Path(state['result_path']).parent
+        request=operation/'request.json'
+        before_result=Path(state['result_path']).read_bytes()
+        replay=subprocess.run([str(operation/'helper.exe'),'--internal-scoop-upgrade',str(request),hashlib.sha256(request.read_bytes()).hexdigest(),state['operation_id']],env=env,capture_output=True,text=True,timeout=15)
+        assert replay.returncode!=0 and Path(state['result_path']).read_bytes()==before_result,'helper request was replayable'
+        records.append({'case':'completed-request-replay','status':'refused-without-changing-result'})
         # A suspended fixture executable is a real loaded image owned by this
         # test. No existing user process is discovered or stopped.
         held=subprocess.Popen([str(exe),'--version'],env=env,creationflags=0x4,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

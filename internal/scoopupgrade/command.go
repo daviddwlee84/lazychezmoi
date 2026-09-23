@@ -171,5 +171,5 @@ func displayCommand(argv []string) string {
 	for i, arg := range argv {
 		parts[i] = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
 	}
-	return strings.Join(parts, " ")
+	return "& " + strings.Join(parts, " ")
 }

@@ -60,7 +60,10 @@ func (p Plan) Handoff(ctx context.Context, interactive bool) (Report, error) {
 			return result, errors.New("invalid existing upgrade lock; inspect local upgrade state")
 		}
 		if processAlive(active.PID, active.Started) {
-			return result, fmt.Errorf("upgrade %s is already active; use upgrade --status %s", active.ID, active.ID)
+			previous, err := readStatus(root, active.ID)
+			if err != nil || !terminal(previous.Status) {
+				return result, fmt.Errorf("upgrade %s is already active; use its status_command to inspect it", active.ID)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
@@ -230,6 +233,19 @@ func HandleHelper(product Product) (int, bool) {
 	}
 	f, err := capture(executable)
 	if err != nil || len(r.Files) != 5 || f.Hash != r.Files[0].Hash {
+		return 1, true
+	}
+	// Claim the hash-bound request once, before writing any status. Replaying
+	// a completed helper cannot run Scoop twice or overwrite its result.
+	claim, err := os.OpenFile(filepath.Join(dir, "helper.claim"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return 1, true
+	}
+	if _, err := fmt.Fprintln(claim, os.Getpid()); err != nil {
+		claim.Close()
+		return 1, true
+	}
+	if err := claim.Close(); err != nil {
 		return 1, true
 	}
 	return runHelper(r, dir), true
