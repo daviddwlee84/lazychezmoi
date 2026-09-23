@@ -168,7 +168,7 @@ class StartupTerminal(Terminal):
             time.sleep(0.01)
         self.drain()
         # Do not include terminal/config/source bodies in benchmark output.
-        raise AssertionError("Timed out: " + label)
+        raise AssertionError("Timed out: " + label + "; fixture_rows=" + repr(re.findall(r"STARTUP_[A-Z]+_LINE_\d+", self.visible_text())) + "; loading=" + str("Loading preview" in self.visible_text()) + "; stale=" + str("Stale snapshot; refresh pending" in self.visible_text()))
 
     def settled_markers(self, pattern, first=None, timeout=2):
         previous, changed = [], time.monotonic()
@@ -373,7 +373,7 @@ def main():
                     terminal.send("v")
                     time.sleep(0.06)
                 terminal.visible("[Source]")
-                terminal.visible("STARTUP_BRAVO_LINE_00")
+                terminal.settled_markers(r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_00", timeout=args.delay)
                 terminal.send("ljj")  # Explicit preview focus, independent of prior pane focus.
                 markers_before = terminal.settled_markers(
                     r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_02")
