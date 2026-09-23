@@ -5,6 +5,7 @@ package scoopupgrade
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -194,4 +195,26 @@ func canonicalPath(path string) (string, error) {
 		return `\\` + strings.TrimPrefix(value, `\\?\UNC\`), nil
 	}
 	return strings.TrimPrefix(value, `\\?\`), nil
+}
+
+// Some hosts (including CI job objects) deny breakaway. A separate console and
+// process group can still outlive the initiating app while the host job lives.
+// The caller reports this limitation; an interrupted helper is never success.
+func startHelper(path string, args []string, interactive bool) (*exec.Cmd, bool, error) {
+	cmd := exec.Command(path, args...)
+	configureHelper(cmd, interactive)
+	err := cmd.Start()
+	if err == nil {
+		return cmd, false, nil
+	}
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return nil, false, err
+	}
+	cmd = exec.Command(path, args...)
+	configureHelper(cmd, interactive)
+	cmd.SysProcAttr.CreationFlags &^= windows.CREATE_BREAKAWAY_FROM_JOB
+	if err := cmd.Start(); err != nil {
+		return nil, false, err
+	}
+	return cmd, true, nil
 }

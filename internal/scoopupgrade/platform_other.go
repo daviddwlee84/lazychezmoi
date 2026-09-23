@@ -23,3 +23,7 @@ func helperConsole(_ bool, output io.Writer) (io.Writer, func()) { return output
 func consolePause(context.Context)                               {}
 
 func canonicalPath(path string) (string, error) { return filepath.EvalSymlinks(path) }
+
+func startHelper(string, []string, bool) (*exec.Cmd, bool, error) {
+	return nil, false, errors.New("Scoop handoff is supported on Windows")
+}
