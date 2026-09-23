@@ -27,7 +27,11 @@ func (f *fakeBackend) Resolve(context.Context) (chezmoi.Context, error) {
 	f.calls++
 	return chezmoi.Context{}, nil
 }
-func (f *fakeBackend) Entries(context.Context, bool) ([]chezmoi.Entry, error) {
+func (f *fakeBackend) Inventory(context.Context, bool) ([]chezmoi.Entry, error) {
+	f.calls++
+	return nil, nil
+}
+func (f *fakeBackend) Status(context.Context, bool) (map[string]chezmoi.EntryStatus, error) {
 	f.calls++
 	return nil, nil
 }
@@ -65,6 +69,7 @@ func fixture() (*model, *fakeBackend) {
 	m := newModel(context.Background(), f, Options{})
 	m.lists[0].entries = []chezmoi.Entry{{ID: "a", Target: "/home/.a", Source: "/src/dot_a", Relative: ".a", Kind: "file"}, {ID: "b", Target: "/home/.b", Source: "/src/dot_b", Relative: ".b", Kind: "file"}, {ID: "c", Target: "/home/.c", Source: "/src/dot_c", Relative: ".c", Kind: "file"}}
 	m.lists[0].loaded = true
+	m.lists[0].statusKnown = true
 	return m, f
 }
 

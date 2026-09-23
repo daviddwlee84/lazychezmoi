@@ -66,6 +66,12 @@ jobs:
       - name: Mouse, hunk and search acceptance (Windows)
         if: runner.os == 'Windows'
         run: python scripts/pty_features.py build/lazychezmoi.exe
+      - name: Staged startup acceptance (Unix)
+        if: runner.os != 'Windows'
+        run: python scripts/pty_startup.py build/lazychezmoi
+      - name: Staged startup acceptance (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/pty_startup.py build/lazychezmoi.exe
 
   release-contract:
     runs-on: ubuntu-latest

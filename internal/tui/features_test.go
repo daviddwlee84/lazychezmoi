@@ -65,6 +65,22 @@ func featureFixture() (*model, *featureBackend) {
 	return m, f
 }
 
+func TestHunkBoundaryNavigationKeepsReviewAvailable(t *testing.T) {
+	for _, key := range []string{"N", "n"} {
+		m, f := featureFixture()
+		s := &m.lists[0]
+		s.view, s.hunkMode, s.snapshot = 3, true, f.snapshot
+		if key == "n" {
+			s.hunkIndex = len(f.snapshot.Hunks) - 1
+		}
+		press(m, key)
+		press(m, ">")
+		if m.dialog == nil || m.dialog.kind != "confirm" {
+			t.Fatalf("%s at a hunk boundary blocked the next review action", key)
+		}
+	}
+}
+
 func hitOf(t *testing.T, m *model, kind, id string) *hitTarget {
 	t.Helper()
 	for _, h := range m.layout().Hits {

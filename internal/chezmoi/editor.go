@@ -21,7 +21,7 @@ func (s *Service) EditSearchFile(ctx context.Context, absolutePath string) (*exe
 	if !filepath.IsAbs(absolutePath) {
 		return nil, errors.New("search editor requires an absolute path")
 	}
-	cx, err := s.Resolve(ctx)
+	cx, manifest, err := s.freshScopeAndManifest(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -44,11 +44,7 @@ func (s *Service) EditSearchFile(ctx context.Context, absolutePath string) (*exe
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 		return nil, errors.New("search editor file is outside the source repository")
 	}
-	for _, scripts := range []bool{false, true} {
-		entries, err := s.Inventory(ctx, scripts)
-		if err != nil {
-			return nil, fmt.Errorf("verify unmanaged editor target: %w", err)
-		}
+	for _, entries := range [][]Entry{manifest.files, manifest.scripts} {
 		for _, entry := range entries {
 			known, knownErr := filepath.EvalSymlinks(entry.Source)
 			if samePath(entry.Source, absolutePath) || samePath(entry.Source, physical) || knownErr == nil && samePath(known, physical) {

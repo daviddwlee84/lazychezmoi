@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +46,11 @@ type Entry struct {
 	Pending       string `json:"pending"`
 }
 
+type EntryStatus struct {
+	Drift   string `json:"drift"`
+	Pending string `json:"pending"`
+}
+
 type GitStatus struct {
 	Branch    string    `json:"branch"`
 	Upstream  string    `json:"upstream"`
@@ -63,13 +67,16 @@ type Operation struct {
 }
 
 type Service struct {
-	opts      Options
-	resolveMu chan struct{}
-	resolved  *Context
-	mu        sync.Mutex
-	fetchedAt time.Time
-	resetMu   sync.Mutex
-	copyMu    sync.Mutex
+	opts               Options
+	metadataMu         sync.Mutex
+	metadataGeneration uint64
+	contextCache       metadataSlot[Context]
+	manifestCache      metadataSlot[*entryManifest]
+	statusCache        [2]metadataSlot[map[string]EntryStatus]
+	mu                 sync.Mutex
+	fetchedAt          time.Time
+	resetMu            sync.Mutex
+	copyMu             sync.Mutex
 }
 
 // New is deliberately free of filesystem, process, and network I/O.
@@ -80,15 +87,20 @@ func New(opts Options) *Service {
 	if opts.GitBinary == "" {
 		opts.GitBinary = "git"
 	}
-	return &Service{opts: opts, resolveMu: make(chan struct{}, 1)}
+	return &Service{opts: opts}
 }
 
-// Invalidate drops only projected context metadata after a child may have
-// changed configuration or .chezmoiroot. There is no persisted content cache.
+// Invalidate starts a new metadata generation and cancels obsolete discovery.
+// It never waits for subprocesses. Rendered/file contents are never cached.
 func (s *Service) Invalidate() {
-	s.resolveMu <- struct{}{}
-	s.resolved = nil
-	<-s.resolveMu
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
+	s.metadataGeneration++
+	clearMetadataSlot(&s.contextCache)
+	clearMetadataSlot(&s.manifestCache)
+	for i := range s.statusCache {
+		clearMetadataSlot(&s.statusCache[i])
+	}
 }
 
 func (s *Service) flags() []string {
@@ -183,26 +195,43 @@ var versionPattern = regexp.MustCompile(`(?:version\s+v?|^v?)(\d+\.\d+\.\d+(?:[-
 // Resolve projects only paths/version out of chezmoi's configuration. Raw
 // configuration (which can contain secrets) is neither retained nor logged.
 func (s *Service) Resolve(ctx context.Context) (Context, error) {
-	select {
-	case s.resolveMu <- struct{}{}:
-	case <-ctx.Done():
-		return Context{}, ctx.Err()
-	}
-	defer func() { <-s.resolveMu }()
-	if s.resolved != nil {
-		return *s.resolved, nil
-	}
+	return loadMetadata(ctx, s, &s.contextCache, true, s.resolveContext)
+}
+
+func (s *Service) resolveContext(ctx context.Context) (Context, error) {
 	var c Context
-	data, err := s.read(ctx, "dump-config", "--format=json")
+	configFile, err := chezmoiConfigFile(s.opts.ConfigFile)
 	if err != nil {
-		return c, fmt.Errorf("resolve chezmoi configuration: %w", err)
+		return c, fmt.Errorf("resolve chezmoi configuration path: %w", err)
+	}
+	probeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		kind string
+		data []byte
+		err  error
+	}
+	results := make(chan result, 3)
+	go func() {
+		data, err := s.read(probeCtx, "dump-config", "--format=json")
+		results <- result{"config", data, err}
+	}()
+	go func() { data, err := s.read(probeCtx, "source-path"); results <- result{"source", data, err} }()
+	go func() { data, err := output(s.command(probeCtx, "--version")); results <- result{"version", data, err} }()
+	values := make(map[string][]byte, 3)
+	for i := 0; i < 3; i++ {
+		r := <-results
+		if r.err != nil {
+			return c, fmt.Errorf("resolve chezmoi %s: %w", r.kind, r.err)
+		}
+		values[r.kind] = r.data
 	}
 	var projection struct {
 		SourceDir      string `json:"sourceDir"`
 		DestinationDir string `json:"destDir"`
 		WorkingTree    string `json:"workingTree"`
 	}
-	if err := json.Unmarshal(data, &projection); err != nil {
+	if err := json.Unmarshal(values["config"], &projection); err != nil {
 		return c, errors.New("chezmoi returned invalid configuration JSON")
 	}
 	c.SourceDir, c.DestinationDir, c.WorkingTree = projection.SourceDir, projection.DestinationDir, projection.WorkingTree
@@ -212,30 +241,14 @@ func (s *Service) Resolve(ctx context.Context) (Context, error) {
 	if c.WorkingTree == "" {
 		c.WorkingTree = c.SourceDir
 	}
-	data, err = s.read(ctx, "source-path")
-	if err != nil {
-		return c, fmt.Errorf("resolve source state: %w", err)
-	}
-	c.SourceStateDir = strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
-	c.ConfigFile = s.opts.ConfigFile
-	if c.ConfigFile == "" {
-		data, err = s.read(ctx, "execute-template", "{{ .chezmoi.configFile }}")
-		if err != nil {
-			return c, errors.New("could not resolve chezmoi configuration file path")
-		}
-		c.ConfigFile = string(data)
-	}
-	data, err = output(s.command(ctx, "--version"))
-	if err != nil {
-		return c, fmt.Errorf("resolve chezmoi version: %w", err)
-	}
-	match := versionPattern.FindStringSubmatch(strings.TrimSpace(string(data)))
+	c.SourceStateDir = strings.TrimSuffix(strings.TrimSuffix(string(values["source"]), "\n"), "\r")
+	c.ConfigFile = configFile
+	match := versionPattern.FindStringSubmatch(strings.TrimSpace(string(values["version"])))
 	if len(match) == 2 {
 		c.Version = match[1]
 	} else {
 		c.Version = "unknown"
 	}
-	s.resolved = &c
 	return c, nil
 }
 
@@ -247,7 +260,11 @@ type managedPaths struct {
 
 // Inventory lists managed paths without evaluating file bodies for status.
 func (s *Service) Inventory(ctx context.Context, scripts bool) ([]Entry, error) {
-	return s.inventory(ctx, scripts)
+	manifest, err := s.manifest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return manifest.entries(scripts), nil
 }
 
 func exactAncestor(sourceRelative string) bool {
@@ -264,67 +281,61 @@ func exactAncestor(sourceRelative string) bool {
 	return false
 }
 
-func (s *Service) inventory(ctx context.Context, scripts bool) ([]Entry, error) {
-	include, exclude := "files,symlinks,remove", "scripts,externals"
-	if scripts {
-		include, exclude = "scripts", "none"
-	}
-	data, err := s.read(ctx, "managed", "--include="+include, "--exclude="+exclude, "--path-style=all", "--format=json")
-	if err != nil {
-		return nil, err
-	}
-	var paths map[string]managedPaths
-	if err := json.Unmarshal(data, &paths); err != nil {
-		return nil, errors.New("chezmoi returned invalid managed-path JSON")
-	}
-	entries := make([]Entry, 0, len(paths))
-	for relative, p := range paths {
-		if p.Absolute == "" || p.SourceAbsolute == "" {
-			return nil, errors.New("chezmoi managed entry lacks source or target path")
-		}
-		kind, template, encrypted := attributes(p.SourceRelative)
-		if scripts && !strings.HasPrefix(kind, "script") {
-			return nil, fmt.Errorf("unrecognized script attributes for %s", p.SourceRelative)
-		}
-		entries = append(entries, Entry{ID: p.Absolute, Target: p.Absolute, Source: p.SourceAbsolute, Relative: relative, Kind: kind, Template: template, Encrypted: encrypted, ExactAncestor: exactAncestor(p.SourceRelative)})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Relative < entries[j].Relative })
-	return entries, nil
-}
-
 // Entries returns useful inventory even when status fails. Callers may display
 // those rows with unknown status alongside the returned error.
 func (s *Service) Entries(ctx context.Context, scripts bool) ([]Entry, error) {
-	entries, err := s.inventory(ctx, scripts)
+	entries, err := s.Inventory(ctx, scripts)
 	if err != nil {
 		return nil, err
 	}
-	include, exclude := "files,symlinks,remove", "scripts,externals"
-	if scripts {
-		include, exclude = "scripts", "none"
-	}
-	data, err := s.read(ctx, "status", "--include="+include, "--exclude="+exclude, "--path-style=relative")
+	status, err := s.Status(ctx, scripts)
 	if err != nil {
 		for i := range entries {
 			entries[i].Drift, entries[i].Pending = "?", "?"
 		}
 		return entries, err
 	}
-	index := make(map[string]int, len(entries))
-	for i, e := range entries {
-		index[e.Relative] = i
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if len(line) < 3 {
-			continue
-		}
-		relative := strings.TrimSuffix(line[3:], "\r")
-		if i, ok := index[relative]; ok {
-			entries[i].Drift = strings.TrimSpace(line[:1])
-			entries[i].Pending = strings.TrimSpace(line[1:2])
-		}
+	for i := range entries {
+		value := status[entries[i].Relative]
+		entries[i].Drift, entries[i].Pending = value.Drift, value.Pending
 	}
 	return entries, nil
+}
+
+// Status evaluates deployment status without running another inventory query.
+// Results are not cached; only simultaneous requests share one subprocess.
+func (s *Service) Status(ctx context.Context, scripts bool) (map[string]EntryStatus, error) {
+	index := 0
+	if scripts {
+		index = 1
+	}
+	values, err := loadMetadata(ctx, s, &s.statusCache[index], false, func(ctx context.Context) (map[string]EntryStatus, error) {
+		include, exclude := "files,symlinks,remove", "scripts,externals"
+		if scripts {
+			include, exclude = "scripts", "externals"
+		}
+		data, err := s.read(ctx, "status", "--include="+include, "--exclude="+exclude, "--path-style=relative")
+		if err != nil {
+			return nil, err
+		}
+		result := make(map[string]EntryStatus)
+		for _, line := range strings.Split(string(data), "\n") {
+			if len(line) < 3 {
+				continue
+			}
+			relative := strings.TrimSuffix(line[3:], "\r")
+			result[relative] = EntryStatus{Drift: strings.TrimSpace(line[:1]), Pending: strings.TrimSpace(line[1:2])}
+		}
+		return result, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	copy := make(map[string]EntryStatus, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy, nil
 }
 
 func attributes(source string) (kind string, template, encrypted bool) {
@@ -382,31 +393,11 @@ func (s *Service) Locate(ctx context.Context, target string) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	if target == "~" || strings.HasPrefix(target, "~/") || strings.HasPrefix(target, `~\`) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return Entry{}, err
-		}
-		target = filepath.Join(home, strings.TrimLeft(target[1:], `/\`))
+	manifest, err := s.manifest(ctx)
+	if err != nil {
+		return Entry{}, err
 	}
-	candidates := []string{target, filepath.Join(c.DestinationDir, target), filepath.Join(c.SourceStateDir, target), filepath.Join(c.SourceDir, target)}
-	if abs, err := filepath.Abs(target); err == nil {
-		candidates = append(candidates, abs)
-	}
-	for _, scripts := range []bool{false, true} {
-		entries, err := s.inventory(ctx, scripts)
-		if err != nil {
-			return Entry{}, err
-		}
-		for _, e := range entries {
-			for _, candidate := range candidates {
-				if samePath(candidate, e.Target) || samePath(candidate, e.Source) {
-					return e, nil
-				}
-			}
-		}
-	}
-	return Entry{}, fmt.Errorf("%s is not a managed file or script", target)
+	return manifest.locate(c, target)
 }
 
 func readPreviewFile(name string) (string, error) {
@@ -479,8 +470,17 @@ func (s *Service) Command(ctx context.Context, op Operation) (*exec.Cmd, error) 
 		if (op.Kind == "edit" || op.Kind == "re-add" || op.Kind == "script-apply") && len(op.Targets) == 0 {
 			return nil, fmt.Errorf("%s requires a selected target", op.Kind)
 		}
+		var manifest *entryManifest
+		var scope Context
+		if len(op.Targets) > 0 {
+			var err error
+			scope, manifest, err = s.freshScopeAndManifest(ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
 		for _, target := range op.Targets {
-			e, err := s.Locate(ctx, target)
+			e, err := manifest.locate(scope, target)
 			if err != nil {
 				return nil, err
 			}

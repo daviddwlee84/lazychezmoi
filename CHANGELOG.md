@@ -20,6 +20,10 @@ retrospectively assigning a first-release version to each feature.
 - Verify release archives and stage complete, checksum-checked binary releases
   for macOS and Linux; use fixed upstream assets for the CI chezmoi fixture.
 
+- Show managed files and Source previews before background status completes,
+  preserving selection and usable rows when status is slow or fails.
+- Share session metadata across file/script browsing and search, avoid the
+  startup template scan, and invalidate reads after refresh or mutations.
 - Add automatic Delta diff rendering with built-in fallback, width-aware layouts,
   and explicit Current/Source/Rendered labels.
 - Add reviewed, snapshot-checked bidirectional hunk copies and session Undo,

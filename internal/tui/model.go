@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -30,7 +29,8 @@ type Options struct {
 type backend interface {
 	Invalidate()
 	Resolve(context.Context) (chezmoi.Context, error)
-	Entries(context.Context, bool) ([]chezmoi.Entry, error)
+	Inventory(context.Context, bool) ([]chezmoi.Entry, error)
+	Status(context.Context, bool) (map[string]chezmoi.EntryStatus, error)
 	GitStatus(context.Context) (chezmoi.GitStatus, error)
 	Fetch(context.Context, bool) error
 	Preview(context.Context, chezmoi.Entry, string) (string, error)
@@ -64,32 +64,37 @@ func newProgram(ctx context.Context, m tea.Model, extra ...tea.ProgramOption) *t
 }
 
 type listState struct {
-	entries                  []chezmoi.Entry
-	query                    string
-	changed                  bool
-	selected, top            int
-	checked                  map[string]bool
-	loaded, loading, stale   bool
-	err                      string
-	gen                      uint64
-	cancel                   context.CancelFunc
-	view                     int
-	preview                  string
-	previewID                string
-	previewLoading           bool
-	previewErr               string
-	previewGen               uint64
-	previewCancel            context.CancelFunc
-	scroll                   int
-	rawDiff                  string
-	snapshot                 *chezmoi.DiffSnapshot
-	hunkReason               string
-	hunkMode                 bool
-	hunkIndex                int
-	renderGen                uint64
-	renderCancel             context.CancelFunc
-	renderWarning            string
-	renderLayout, renderName string
+	entries                                 []chezmoi.Entry
+	query                                   string
+	changed                                 bool
+	selected, top                           int
+	checked                                 map[string]bool
+	loaded, loading, stale                  bool
+	err                                     string
+	gen                                     uint64
+	cancel                                  context.CancelFunc
+	statusKnown, statusLoading, statusStale bool
+	statusErr                               string
+	statusGen                               uint64
+	statusCancel                            context.CancelFunc
+	sortPending                             bool
+	view                                    int
+	preview                                 string
+	previewID                               string
+	previewLoading                          bool
+	previewErr                              string
+	previewGen                              uint64
+	previewCancel                           context.CancelFunc
+	scroll                                  int
+	rawDiff                                 string
+	snapshot                                *chezmoi.DiffSnapshot
+	hunkReason                              string
+	hunkMode                                bool
+	hunkIndex                               int
+	renderGen                               uint64
+	renderCancel                            context.CancelFunc
+	renderWarning                           string
+	renderLayout, renderName                string
 }
 
 type pendingOperation struct {
@@ -141,6 +146,9 @@ type model struct {
 	fetching            bool
 	fetchGen            uint64
 	fetchCancel         context.CancelFunc
+	autoFetchStarted    bool
+	refreshGen          uint64
+	invalidations       invalidationGate
 	dialog              *dialog
 	dialogGen           uint64
 	pending             *pendingOperation
@@ -246,9 +254,6 @@ func (m *model) Init() tea.Cmd {
 	if m.opts.Diff.Theme == "" || m.opts.Diff.Theme == "auto" {
 		cmds = append(cmds, tea.RequestBackgroundColor)
 	}
-	if m.opts.AutoFetch {
-		cmds = append(cmds, m.fetch())
-	}
 	return tea.Batch(cmds...)
 }
 
@@ -263,6 +268,12 @@ func (m *model) loadEntries(tab int) tea.Cmd {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.statusCancel != nil {
+		s.statusCancel()
+	}
+	s.statusGen++
+	s.statusLoading = false
+	s.statusStale = s.statusKnown
 	ctx, cancel := context.WithCancel(m.ctx)
 	s.cancel = cancel
 	s.gen++
@@ -270,7 +281,7 @@ func (m *model) loadEntries(tab int) tea.Cmd {
 	gen, service := s.gen, m.service
 	return func() tea.Msg {
 		defer cancel()
-		e, err := service.Entries(ctx, tab == 1)
+		e, err := service.Inventory(ctx, tab == 1)
 		return entriesMsg{tab, gen, e, err}
 	}
 }
@@ -408,6 +419,8 @@ func (m *model) report(message string, failed bool) {
 }
 
 func (m *model) invalidate() {
+	m.refreshGen++
+	m.invalidations.latest.Store(m.refreshGen)
 	m.pressed = nil
 	m.cancelSearch()
 	m.search.stale = len(m.search.result.Matches) > 0
@@ -417,6 +430,13 @@ func (m *model) invalidate() {
 	for i := range m.lists {
 		s := &m.lists[i]
 		s.gen++
+		s.statusGen++
+		s.statusLoading = false
+		s.statusStale = s.statusKnown
+		if s.statusCancel != nil {
+			s.statusCancel()
+		}
+		s.sortPending = false
 		s.previewGen++
 		s.renderGen++
 		if s.renderCancel != nil {
@@ -439,6 +459,17 @@ func (m *model) refresh() tea.Cmd {
 	if m.pending != nil {
 		return nil
 	}
+	m.invalidate()
+	gen, service, gate := m.refreshGen, m.service, &m.invalidations
+	return func() tea.Msg {
+		if !gate.invalidate(gen, service) {
+			return nil
+		}
+		return refreshReadyMsg{gen}
+	}
+}
+
+func (m *model) reloadViews() tea.Cmd {
 	cmds := []tea.Cmd{m.loadScope(), m.loadGit()}
 	for i := range m.lists {
 		if i == m.tab || m.lists[i].loaded {
@@ -449,6 +480,14 @@ func (m *model) refresh() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	result, cmd := m.update(msg)
+	return result, tea.Batch(cmd, m.flushPendingSorts())
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, handled := m.readinessMessage(msg); handled {
+		return m, cmd
+	}
 	if cmd, handled := m.featureMessage(msg); handled {
 		return m, cmd
 	}
@@ -472,60 +511,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scopeErr = ""
 		}
 	case entriesMsg:
-		s := &m.lists[msg.tab]
-		if msg.gen != s.gen {
-			return m, nil
-		}
-		m.pressed = nil
-		s.loading = false
-		if msg.err != nil && len(msg.entries) == 0 {
-			s.err = msg.err.Error()
-			s.stale = s.loaded
-			return m, nil
-		}
-		old := s.visible()
-		id := ""
-		if s.selected < len(old) {
-			id = old[s.selected].ID
-		}
-		s.entries = msg.entries
-		s.loaded = true
-		s.err = ""
-		s.stale = false
-		if msg.err != nil {
-			s.err = msg.err.Error()
-			s.stale = true
-		}
-		sort.SliceStable(s.entries, func(i, j int) bool {
-			a, b := s.entries[i], s.entries[j]
-			if entryChanged(a) != entryChanged(b) {
-				return entryChanged(a)
-			}
-			return a.Relative < b.Relative
-		})
-		visible := s.visible()
-		s.selected = min(s.selected, max(0, len(visible)-1))
-		for i, e := range visible {
-			if e.ID == id {
-				s.selected = i
-				break
-			}
-		}
-		valid := map[string]bool{}
-		for _, e := range s.entries {
-			valid[e.ID] = true
-		}
-		for id := range s.checked {
-			if !valid[id] {
-				delete(s.checked, id)
-			}
-		}
-		if m.status == "Loading local source…" {
-			m.status = "Ready"
-		}
-		if m.tab == msg.tab {
-			return m, m.loadPreview()
-		}
+		return m, m.acceptInventory(msg)
 	case previewMsg:
 		s := &m.lists[msg.tab]
 		if msg.gen != s.previewGen || msg.id != s.previewID || msg.view != previewViews[s.view] {
@@ -964,21 +950,31 @@ func (m *model) beginOperation(op *pendingOperation) tea.Cmd {
 func (m *model) prepareOperation() tea.Cmd {
 	op := *m.pending
 	service, ctx := m.service, m.ctx
-	if cmd, ok := m.prepareFeatureOperation(op); ok {
-		return cmd
+	effect, feature := m.prepareFeatureOperation(op)
+	if !feature {
+		if op.reset {
+			effect = func() tea.Msg { return resetMsg{op.id, service.ResetScript(ctx, op.entry, op.records)} }
+		} else {
+			effect = func() tea.Msg { cmd, err := service.Command(ctx, op.op); return preparedMsg{op.id, cmd, err} }
+		}
 	}
-	if op.reset {
-		return func() tea.Msg { return resetMsg{op.id, service.ResetScript(ctx, op.entry, op.records)} }
+	gate, epoch := &m.invalidations, m.refreshGen
+	return func() tea.Msg {
+		// Wait for an older, already-entered invalidation to finish before a
+		// fresh action starts. Queued obsolete workers fail the epoch check.
+		if !gate.fence(epoch) {
+			return operationMsg{op.id, context.Canceled}
+		}
+		return effect()
 	}
-	return func() tea.Msg { cmd, err := service.Command(ctx, op.op); return preparedMsg{op.id, cmd, err} }
 }
 
 func (m *model) finishOperation(id uint64, err error) tea.Cmd {
 	if m.pending == nil || m.pending.id != id {
 		return nil
 	}
-	service := m.service
-	return func() tea.Msg { service.Invalidate(); return operationCompleteMsg{id, err} }
+	service, gate, epoch := m.service, &m.invalidations, m.refreshGen
+	return func() tea.Msg { gate.invalidate(epoch, service); return operationCompleteMsg{id, err} }
 }
 
 func (m *model) completeOperation(id uint64, err error) tea.Cmd {
@@ -1002,7 +998,7 @@ func (m *model) completeOperation(id uint64, err error) tea.Cmd {
 	if op.op.Kind == "edit" && m.tab < 2 {
 		m.lists[m.tab].view = 3
 	}
-	cmds := []tea.Cmd{m.refresh()}
+	cmds := []tea.Cmd{m.reloadViews()}
 	if m.search.text != "" {
 		cmds = append(cmds, m.scheduleSearch())
 	}

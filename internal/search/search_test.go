@@ -137,6 +137,35 @@ func TestCurrentAllowlistAndArgumentBatches(t *testing.T) {
 	}
 }
 
+func TestSessionInventoryRefreshDoesNotCacheSearchContents(t *testing.T) {
+	f := newFixture(t)
+	write(t, f.source, "existing", "source first\n")
+	write(t, f.destination, "existing", "current first\n")
+	s := New(Options{})
+	ctx := context.Background()
+	assertMatches := func(scope, keyword string, want int) {
+		t.Helper()
+		result, err := s.Search(ctx, f.owner, Query{Scope: scope, Text: keyword})
+		if err != nil || len(result.Matches) != want {
+			t.Fatalf("scope %s, query %q: matches=%d, want=%d, err=%v", scope, keyword, len(result.Matches), want, err)
+		}
+	}
+	assertMatches("current", "first", 1)
+	write(t, f.source, "existing", "source second\n")
+	write(t, f.destination, "existing", "current second\n")
+	assertMatches("source", "second", 1)
+	assertMatches("current", "second", 1)
+	assertMatches("current", "first", 0)
+
+	// A new managed path enters the Current allowlist after refresh; existing
+	// file contents above are always read live, even with cached path metadata.
+	write(t, f.source, "added", "source second\n")
+	write(t, f.destination, "added", "current second\n")
+	assertMatches("current", "second", 1)
+	f.owner.Invalidate()
+	assertMatches("current", "second", 2)
+}
+
 func TestLiteralSmartCaseRegexAndLimit(t *testing.T) {
 	f := newFixture(t)
 	write(t, f.source, ".chezmoitemplates/data", "a.b\naXb\nNEEDLE\nneedle\n")

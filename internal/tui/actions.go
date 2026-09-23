@@ -54,7 +54,7 @@ func (m *model) actions() []action {
 		{"lazygit", "L", "Open lazygit", idle, true, true},
 		{"refresh", "r", "Refresh local state", idle, false, false},
 		{"filter", "/", "Filter targets", m.tab < 2, false, false},
-		{"changed", "c", "Toggle changed files only", m.tab < 2, false, false},
+		{"changed", "c", "Toggle changed files only", m.tab < 2 && m.lists[m.tab].statusKnown, false, false},
 		{"select", "space", "Toggle selection", file, false, false},
 		{"clear-selection", "", "Clear selected files", m.tab == 0, false, false},
 		{"next-preview", "v", "Next preview (Source / Current / Rendered / Diff)", m.tab < 2, false, false},
@@ -173,9 +173,6 @@ func (m *model) dispatch(id string) tea.Cmd {
 	case "fetch-interactive":
 		return m.beginOperation(operation("fetch", "Fetch", nil))
 	case "refresh":
-		if m.tab == 3 {
-			return m.startSearch()
-		}
 		return m.refresh()
 	case "edit", "edit-apply":
 		op := operation("edit", "Edit source", []string{e.Target})

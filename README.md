@@ -56,7 +56,11 @@ lazychezmoi --source /path/to/source --destination /path/to/destination \
 | `:` / `?` | 搜尋 action menu／說明 |
 | `q` | 退出；正常退出不 reload shell |
 
-啟動先呈現畫面，背景 fetch 一次，不自動 pull 或 apply。Git 的 ahead／behind 與檔案部署差異是不同資訊。沒有 tracking upstream、認證不可用或讀取失敗會明確顯示；`Fetch interactively` action 可交還終端處理認證。以 `--auto-fetch=false` 關閉啟動 fetch。
+啟動先列出受管檔案並顯示 Source 預覽，完整 status 在背景自動補齊；期間可先選檔、搜尋及編輯。`?` 表示差異尚未確認，首次 status 成功前不開放「只看變動」。status 失敗仍保留可用的檔案清單，按 `r` 可重試。差異更新會保留目前選取及預覽位置。
+
+第一次檔案清單回應後，背景 fetch 一次，不自動 pull 或 apply。Git 的 ahead／behind 與檔案部署差異是不同資訊。沒有 tracking upstream、認證不可用或讀取失敗會明確顯示；`Fetch interactively` action 可交還終端處理認證。以 `--auto-fetch=false` 關閉啟動 fetch。
+
+受管路徑沿用原生 chezmoi 的 ignore／source 語義，Files、Scripts 與內容搜尋共用本次 session 的 metadata。按 `r`、編輯返回或其他操作完成時會重新讀取；外部新增或移除檔案後也可按 `r` 更新清單。檔案內容、render 結果及完整 status 不會寫入磁碟快取。
 
 一般檔案提供 `Absorb local edits (re-add)`，讓直接修改的 live config 回到來源。模板、`modify_`、`create_` 及 encrypted 不提供這個一般檔案 action；它們保留原生語義。`create_` 是 seed：既存的目標不會被普通 apply 覆蓋。
 
@@ -225,11 +229,14 @@ go test -race ./...
 go build -o build/ .
 python3 scripts/pty_smoke.py build/lazychezmoi
 uv run --no-project --with pyte==0.8.2 python scripts/pty_features.py build/lazychezmoi
+uv run --no-project --with pyte==0.8.2 python scripts/pty_startup.py build/lazychezmoi
 ```
 
 chezmoi 整合測試使用獨立 source、config、destination、cache 和 state，不套用到使用者家目錄。未安裝 chezmoi 的環境會略過相應測試；CI 安裝固定的 2.69.4 來執行。Shell tests 使用可取得的 Bash、Zsh、Fish 與 PowerShell，驗證 caller scope、參數、失敗及 reload。
 
 CI 包含 macOS／Linux／Windows 的 vet、race tests、build 和真實 PTY／ConPTY editor→apply、mouse、hunk→Undo、live grep 驗收。Windows 的 Python harness 需要 `pywinpty`；feature harness 使用 `pyte` 檢查 ASCII 介面控制，Unicode 寬度另有 Go 測試。CI 準備 rg／delta，使相關測試實際執行。本機跨編譯只能證明編譯成功，不能代替原生 Windows 終端驗收。
+
+Startup harness 使用一次性 fixture，刻意讓 status 延遲五秒，驗證清單、Source 預覽與操作先就緒，並分別回報畫面、可用清單、預覽及完整 status 的時間與 native command 次數。這些時間取決於機器與資料量；不對真實 dotfiles 執行 apply。
 
 程式分成 `internal/chezmoi`（共享操作／hunk snapshots）、`internal/diffview`（delta／內建 renderer）、`internal/search`（rg／結果預覽）、`internal/tui`（模型／action registry／共用 layout）、`internal/cli`（命令介面）、`internal/config` 與 `internal/shell`。介面建立不執行 I/O；非同步結果依 request generation 接受，寫入結束後重新取得狀態。
 

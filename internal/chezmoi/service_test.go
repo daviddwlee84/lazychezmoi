@@ -77,6 +77,7 @@ func runOperation(t *testing.T, s *Service, op Operation) {
 	if data, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %v\n%s", cmd.Args, err, data)
 	}
+	s.Invalidate()
 }
 
 func requireEntry(t *testing.T, s *Service, target string) Entry {
@@ -355,7 +356,7 @@ func TestNoConstructorIOAndReloadEnvironmentScrubbed(t *testing.T) {
 
 func TestUnsupportedAdapterDoesNotMutate(t *testing.T) {
 	s := New(Options{})
-	s.resolved = &Context{Version: "99.0.0"}
+	s.contextCache.value, s.contextCache.valid = Context{Version: "99.0.0"}, true
 	_, err := s.ScriptRecords(context.Background(), Entry{Kind: "script-once"})
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unsupported adapter: %v", err)
@@ -382,8 +383,6 @@ func TestInvalidateResolvesChangedSourceRoot(t *testing.T) {
 
 func TestResolveWaitCanBeCancelled(t *testing.T) {
 	s := New(Options{})
-	s.resolveMu <- struct{}{}
-	defer func() { <-s.resolveMu }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := s.Resolve(ctx)
@@ -808,6 +807,7 @@ func TestEncryptedEditorDelegatesDecryptAndReencrypt(t *testing.T) {
 		if err := add.Run(); err != nil {
 			t.Fatalf("native encrypted %s add failed: %v", item.flag, err)
 		}
+		f.s.Invalidate()
 		entry := requireEntry(t, f.s, name)
 		if !entry.Encrypted || entry.Template != item.template || entry.Kind != item.kind {
 			t.Fatalf("native encrypted prefix/suffix parsing: %+v", entry)

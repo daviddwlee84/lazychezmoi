@@ -444,7 +444,7 @@ func (s *Service) Hunks(ctx context.Context, e Entry) (*DiffSnapshot, error) {
 	if err := eligibleHunkEntry(e); err != nil {
 		return nil, err
 	}
-	actual, err := s.Locate(ctx, e.Source)
+	actual, c, err := s.locateFresh(ctx, e.Source)
 	if err != nil {
 		return nil, err
 	}
@@ -453,10 +453,6 @@ func (s *Service) Hunks(ctx context.Context, e Entry) (*DiffSnapshot, error) {
 	}
 	if actual.ID != e.ID || !samePath(actual.Source, e.Source) {
 		return nil, errors.New("managed mapping changed; refresh the diff")
-	}
-	c, err := s.Resolve(ctx)
-	if err != nil {
-		return nil, err
 	}
 	guard, err := newRoutingGuard(c, actual)
 	if err != nil {

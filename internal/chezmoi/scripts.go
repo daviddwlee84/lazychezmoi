@@ -42,8 +42,12 @@ func (s *Service) scriptAdapter(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if c.Version != "2.69.4" {
-		return fmt.Errorf("granular script state is not supported for chezmoi %s (validated adapter: 2.69.4); normal script apply is available", c.Version)
+	return scriptAdapterVersion(c.Version)
+}
+
+func scriptAdapterVersion(version string) error {
+	if version != "2.69.4" {
+		return fmt.Errorf("granular script state is not supported for chezmoi %s (validated adapter: 2.69.4); normal script apply is available", version)
 	}
 	return nil
 }
@@ -133,12 +137,15 @@ func (s *Service) ResetScript(ctx context.Context, e Entry, records []ScriptReco
 	if len(records) == 0 {
 		return errors.New("no script history records selected")
 	}
-	actual, err := s.Locate(ctx, e.Source)
+	actual, scope, err := s.locateFresh(ctx, e.Source)
 	if err != nil {
 		return err
 	}
 	if actual.ID != e.ID || actual.Kind != e.Kind {
 		return errors.New("selected script changed; refresh before resetting history")
+	}
+	if err := scriptAdapterVersion(scope.Version); err != nil {
+		return err
 	}
 	fresh, err := s.ScriptRecords(ctx, actual)
 	if err != nil {

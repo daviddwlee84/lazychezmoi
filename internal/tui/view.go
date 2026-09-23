@@ -211,6 +211,10 @@ func (m *model) listContent(width, height int) paneContent {
 	}
 	if s.loading {
 		title += " · loading"
+	} else if s.statusLoading {
+		title += " · checking status"
+	} else if s.statusKnown && !s.statusStale && s.statusErr == "" {
+		title += " · status ready"
 	}
 	if s.stale {
 		title += " · stale"
@@ -234,6 +238,16 @@ func (m *model) listContent(width, height int) paneContent {
 	}
 	if s.err != "" {
 		lines = append(lines, m.paint(errorText(s.err), "1"))
+	}
+	if s.statusErr != "" {
+		label := "Change status unavailable: "
+		if s.statusLoading {
+			label = "Previous change status error: "
+		}
+		lines = append(lines, m.paint(label+singleLine(s.statusErr), "1"))
+	}
+	if s.statusStale {
+		lines = append(lines, "Previous change status · stale")
 	}
 	if len(entries) == 0 {
 		text := "No managed files. : actions / r retry"
@@ -312,6 +326,13 @@ func (m *model) detailPane(width, height int) []string {
 	} else {
 		lines = append(lines, singleLine(entryLabel(e)))
 		flags := singleLine(e.Kind)
+		if s.statusLoading {
+			flags += " · checking changes"
+		} else if s.statusErr != "" {
+			flags += " · change status unavailable"
+		} else if !s.statusKnown {
+			flags += " · change status unknown"
+		}
 		if e.Drift == "?" {
 			flags += " · local: unknown"
 		} else if strings.TrimSpace(e.Drift) != "" {

@@ -160,7 +160,11 @@ func (m *model) toggleHunks() tea.Cmd {
 
 func (m *model) selectHunk(delta int) tea.Cmd {
 	s := &m.lists[0]
-	s.hunkIndex = max(0, min(s.hunkIndex+delta, hunkCount(s)-1))
+	next := max(0, min(s.hunkIndex+delta, hunkCount(s)-1))
+	if next == s.hunkIndex {
+		return nil
+	}
+	s.hunkIndex = next
 	s.scroll = 0
 	return m.renderCachedDiff(0)
 }
