@@ -367,12 +367,8 @@ def main():
 
                 # Editors may intentionally select the Diff view. Restore Source
                 # explicitly, then prove a late status result preserves it.
-                for _ in range(4):
-                    terminal.drain()
-                    if "[Source]" in terminal.visible_text():
-                        break
-                    terminal.send("v")
-                    time.sleep(0.06)
+                terminal.visible("[Diff]")
+                terminal.send("v")
                 terminal.visible("[Source]")
                 terminal.settled_markers(r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_00", timeout=args.delay)
                 # ConPTY may group a multi-character write into one text event.
