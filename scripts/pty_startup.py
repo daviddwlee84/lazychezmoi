@@ -351,7 +351,17 @@ def main():
                 terminal.wait(editor_log.exists, "editor before status", timeout=args.delay)
                 assert json.loads(editor_log.read_text(encoding="utf-8"))["name"] == "bravo.toml", "editor opened the wrong selection"
                 assert not completed_status(log), "editor could not launch before native status"
-                terminal.visible("Edit source complete", timeout=args.delay)
+                if os.name == "nt":
+                    # ConPTY can coalesce the temporary completion footer with
+                    # the following refresh frame. Assert the durable handoff:
+                    # native edit succeeded and the dashboard regained input.
+                    terminal.wait(lambda: any(e["command"] == "edit" and e["phase"] == "end" and e["code"] == 0 for e in events(log))
+                                  and "lazychezmoi" in terminal.visible_text()
+                                  and "Files" in terminal.visible_text(),
+                                  "successful editor return to dashboard", timeout=args.delay)
+                    assert "Edit source failed" not in terminal.visible_text(), "editor failure was reported after successful native exit"
+                else:
+                    terminal.visible("Edit source complete", timeout=args.delay)
                 operation_timings["edit_return"] = time.perf_counter() - sent
 
                 # Editors may intentionally select the Diff view. Restore Source
