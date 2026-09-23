@@ -374,7 +374,13 @@ def main():
                     time.sleep(0.06)
                 terminal.visible("[Source]")
                 terminal.settled_markers(r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_00", timeout=args.delay)
-                terminal.send("ljj")  # Explicit preview focus, independent of prior pane focus.
+                # ConPTY may group a multi-character write into one text event.
+                # Exercise separate navigation keys as an interactive user would.
+                terminal.send("l")
+                terminal.drain()
+                terminal.send("j")
+                terminal.settled_markers(r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_01")
+                terminal.send("j")
                 markers_before = terminal.settled_markers(
                     r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_02")
                 assert not completed_status(log), "preview scroll snapshot waited for native status"
