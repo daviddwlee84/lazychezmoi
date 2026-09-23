@@ -154,8 +154,12 @@ def main():
             terminal.wait(lambda: helper.read_text() == "helper edited\n", "unmanaged helper editor")
             terminal.visible("complete")
             terminal.send("s\x15answer")
-            terminal.visible("Search")
+            # The Search header may already be on screen from the previous
+            # query. Wait for this query's result before accepting/clicking.
+            terminal.visible("dot_demo.toml:1:1")
+            terminal.visible("Scope: source")
             terminal.send("\r")
+            terminal.wait(lambda: "Typing searches" not in "\n".join(terminal.screen.display), "accepted search input")
             terminal.click_text("Current")
             terminal.visible("Scope: current")
             terminal.visible("1 matches")
