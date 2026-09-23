@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 )
 
 func processStarted(int) uint64     { return 0 }
@@ -20,3 +21,5 @@ func configureManager(*exec.Cmd)                                 {}
 func installedProcessRunning(string, string) bool                { return false }
 func helperConsole(_ bool, output io.Writer) (io.Writer, func()) { return output, func() {} }
 func consolePause(context.Context)                               {}
+
+func canonicalPath(path string) (string, error) { return filepath.EvalSymlinks(path) }

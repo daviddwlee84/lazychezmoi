@@ -168,3 +168,30 @@ func consolePause(ctx context.Context) {
 	case <-done:
 	}
 }
+
+// Query the opened target instead of text-walking Scoop's directory junction.
+// This also normalizes short names and extended Windows path prefixes.
+func canonicalPath(path string) (string, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(name, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	buffer := make([]uint16, 32768)
+	n, err := windows.GetFinalPathNameByHandle(h, &buffer[0], uint32(len(buffer)), 0)
+	if err != nil {
+		return "", err
+	}
+	if n >= uint32(len(buffer)) {
+		return "", fmt.Errorf("resolved path exceeds Windows path limit")
+	}
+	value := windows.UTF16ToString(buffer[:n])
+	if strings.HasPrefix(value, `\\?\UNC\`) {
+		return `\\` + strings.TrimPrefix(value, `\\?\UNC\`), nil
+	}
+	return strings.TrimPrefix(value, `\\?\`), nil
+}

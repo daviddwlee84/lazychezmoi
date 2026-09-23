@@ -106,7 +106,7 @@ func canonical(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(p)
+	return canonicalPath(p)
 }
 
 func samePath(a, b string) bool {
