@@ -331,22 +331,16 @@ func runHelper(r request, dir string) int {
 	if err != nil {
 		return finish("failed", "Scoop returned success but its current executable is missing.")
 	}
-	version, err := Inspect(ctx, current, r.Product)
-	if err != nil {
-		return finish("failed", "Scoop returned success but the installed executable could not be verified.")
-	}
-	// Re-prove the current receipt/manager after the junction moved. No new
-	// manager command or GitHub release query occurs during this verification.
+	// One post-manager observation binds the actual product/version, receipt,
+	// manager root and current junction; do not combine separate version reads.
 	after, err := Prepare(ctx, current, r.Product, Options{})
 	if err != nil || !samePath(after.Root, r.Root) || after.Package != r.Package || after.Bucket != r.Bucket {
-		return finish("failed", "Scoop installation ownership changed during update.")
+		return finish("failed", "Scoop returned success but the effective package ownership or executable could not be verified.")
 	}
+	version := after.CurrentVersion
 	result.Version, result.Path = version, after.StablePath
-	fingerprint, err := capture(current)
-	if err != nil {
-		return finish("failed", "Cannot verify the effective installed executable.")
-	}
-	result.Changed = version != r.Version || !samePath(current, r.CurrentPath) || fingerprint.Hash != r.Files[0].Hash
+	result.ChangeKnown = true
+	result.Changed = version != r.Version || !samePath(after.CurrentPath, r.CurrentPath) || after.request.Files[0].Hash != r.Files[0].Hash
 	if result.Changed {
 		return finish("updated", "Verified installed version: "+version)
 	}

@@ -62,11 +62,11 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         bucket=scoop/'buckets/fixture/bucket';bucket.mkdir(parents=True)
         package='installed-'+a.project
         manifest=bucket/(package+'.json')
-        def set_manifest(v, bad_hash=False):
+        def set_manifest(v, bad_hash=False, advertised=None):
             archive=assets/(a.binary+'-'+v+'.zip')
             with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z: z.write(binaries[v],a.binary+'.exe')
             digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-            manifest.write_text(json.dumps({'version':v[1:],'description':'isolated manager acceptance','homepage':'https://example.invalid','license':'MIT','architecture':{'64bit':{'url':f'http://127.0.0.1:{server.server_port}/{archive.name}','hash':'0'*64 if bad_hash else digest}},'bin':a.binary+'.exe'}))
+            manifest.write_text(json.dumps({'version':advertised or v[1:],'description':'isolated manager acceptance','homepage':'https://example.invalid','license':'MIT','architecture':{'64bit':{'url':f'http://127.0.0.1:{server.server_port}/{archive.name}','hash':'0'*64 if bad_hash else digest}},'bin':a.binary+'.exe'}))
         scoop_cmd=[pwsh,'-NoLogo','-NoProfile','-File',str(manager/'bin/scoop.ps1')]
         set_manifest('v0.0.1')
         run(scoop_cmd+['install','fixture/'+package],env=env)
@@ -102,9 +102,9 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         try: apply('blocked')
         finally: held.kill();held.wait(timeout=10)
         apply('up-to-date')
-        set_manifest('v0.0.1',bad_hash=True)
-        # Scoop may refuse a lower version without downloading. Force is never
-        # used; failure/cancellation command boundaries have separate tests.
+        set_manifest('v0.0.2',bad_hash=True,advertised='0.0.3')
+        apply('failed')
+        assert 'v0.0.2' in run([str(exe),'--version'],env=env), 'checksum failure changed the installed version'
         assert hashlib.sha256(old.read_bytes()).hexdigest()==old_hash,'old version payload was unexpectedly overwritten'
         output=repo/'build/windows-scoop-smoke.json';output.parent.mkdir(exist_ok=True)
         output.write_text(json.dumps({'scoop_source':SCOOP_SHA,'project':a.project,'cases':records},indent=2))

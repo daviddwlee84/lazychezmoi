@@ -15,6 +15,7 @@ import (
 )
 
 type CommandOptions struct {
+	Before     func(*cobra.Command) error
 	Promptless bool
 	WriteJSON  func(*cobra.Command, Report) error
 	UsageError func(string) error
@@ -25,9 +26,15 @@ type CommandOptions struct {
 // Non-Scoop installations keep their original implementation and policy.
 func Wrap(command *cobra.Command, product Product, options CommandOptions) *cobra.Command {
 	previous := command.RunE
+	command.Long = strings.TrimSpace(command.Long + "\n\nWindows Scoop upgrades exit this process and finish in a separate helper. --check is read-only. During an active update, use the returned status_command to query without starting the package Scoop is replacing; afterwards upgrade --status OPERATION also reads the result. Only this CLI is updated, not its backend or data.")
 	var status string
 	command.Flags().StringVar(&status, "status", "", "Read a previous Scoop upgrade operation without making changes")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
+		if options.Before != nil {
+			if err := options.Before(cmd); err != nil {
+				return err
+			}
+		}
 		isJSON, _ := cmd.Flags().GetBool("json")
 		write := func(report Report) error {
 			if isJSON {

@@ -55,7 +55,7 @@ func newUpgradeCommand(options upgradeOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "upgrade", Short: "Upgrade this lazychezmoi installation through its verified package owner",
 		Args: args(cobra.NoArgs),
-		Long: "Inspect the running executable and upgrade its verified Homebrew formula. Other installation methods receive instructions and are never overwritten. This command does not load chezmoi configuration.",
+		Long: "Inspect the running executable and upgrade its verified Homebrew or Scoop package. Other installation methods receive instructions and are never overwritten. This command does not load chezmoi configuration.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := cmd.Context().Err(); err != nil {
 				return err
