@@ -377,7 +377,7 @@ def main():
                 # ConPTY may group a multi-character write into one text event.
                 # Exercise separate navigation keys as an interactive user would.
                 terminal.send("l")
-                terminal.wait(lambda: "> Preview" in terminal.visible_text(), "focused preview pane")
+                terminal.wait(lambda: "> [Source]" in terminal.visible_text(), "focused preview pane")
                 terminal.send("j")
                 terminal.settled_markers(r"STARTUP_BRAVO_LINE_\d+", first="STARTUP_BRAVO_LINE_01")
                 terminal.send("j")
