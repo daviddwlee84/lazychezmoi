@@ -106,3 +106,8 @@ jobs:
           args: release --snapshot --clean
       - name: Verify four platform archives and native startup
         run: python3 scripts/release.py check --project lazychezmoi --binary lazychezmoi --smoke
+
+  windows-distribution:
+    uses: ./.github/workflows/windows.yml
+    with:
+      ref: ${{ inputs.ref || github.ref }}

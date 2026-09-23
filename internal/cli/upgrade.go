@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/daviddwlee84/lazychezmoi/internal/scoopupgrade"
 	"io"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ func newUpgradeCommand(options upgradeOptions) *cobra.Command {
 		prepare = prepareManagedUpgrade
 	}
 	cmd := &cobra.Command{
-		Use: "upgrade", Short: "Upgrade this lazychezmoi installation through its verified Homebrew owner",
+		Use: "upgrade", Short: "Upgrade this lazychezmoi installation through its verified package owner",
 		Args: args(cobra.NoArgs),
 		Long: "Inspect the running executable and upgrade its verified Homebrew formula. Other installation methods receive instructions and are never overwritten. This command does not load chezmoi configuration.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -136,7 +137,7 @@ func newUpgradeCommand(options upgradeOptions) *cobra.Command {
 	if options.json == nil {
 		cmd.Flags().BoolVar(jsonMode, "json", false, "Write structured JSON without prompting")
 	}
-	return cmd
+	return scoopupgrade.Wrap(cmd, scoopupgrade.Product{Binary: "lazychezmoi", Module: "github.com/daviddwlee84/lazychezmoi", Main: "github.com/daviddwlee84/lazychezmoi"}, scoopupgrade.CommandOptions{})
 }
 
 func prepareManagedUpgrade(ctx context.Context) (managedUpgradePlan, error) {
