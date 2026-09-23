@@ -354,11 +354,12 @@ def main():
                 if os.name == "nt":
                     # ConPTY can coalesce the temporary completion footer with
                     # the following refresh frame. Assert the durable handoff:
-                    # native edit succeeded and the dashboard regained input.
+                    # native edit succeeded and completeOperation selected its Diff view.
+                    # The old Source screen can remain visible before that event.
                     terminal.wait(lambda: any(e["command"] == "edit" and e["phase"] == "end" and e["code"] == 0 for e in events(log))
                                   and "lazychezmoi" in terminal.visible_text()
-                                  and "Files" in terminal.visible_text(),
-                                  "successful editor return to dashboard", timeout=args.delay)
+                                  and "[Diff]" in terminal.visible_text(),
+                                  "successful editor return and refreshed diff", timeout=args.delay)
                     assert "Edit source failed" not in terminal.visible_text(), "editor failure was reported after successful native exit"
                 else:
                     terminal.visible("Edit source complete", timeout=args.delay)
